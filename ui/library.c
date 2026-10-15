@@ -254,6 +254,9 @@ static void group_play_cb(lv_event_t *e){
     int gi=(int)(uintptr_t)lv_event_get_user_data(e);
     int kind = (g_view==VIEW_ALBUMS)?1:(g_view==VIEW_GENRES)?3:2;
     int lt   = (kind==1)?3:(kind==3)?10:2;   /* 3=album, 10=genre, 2=artist */
+    if(ui_get_source_mode() == 4 && !ui_usb_dac_connected()){
+        ui_toast("USB DAC not connected"); return;
+    }
     ui_set_workmode(0);                        /* sequential */
     if(lt == 2 && !g_gnames[gi][0]){
         if(!missing_artist_play(-1)) return;
@@ -551,6 +554,9 @@ static int current_list_context(int *lt, char *name, int cap){
 /* Play the current list, setting the play-mode first (0=Sequential, 1=Shuffle).
  * Play-mode = 0102 (ground-truth captured 2026-06-25); ui_set_workmode applies it. */
 static void play_list_mode(int mode){
+    if(ui_get_source_mode() == 4 && !ui_usb_dac_connected()){
+        ui_toast("USB DAC not connected"); return;
+    }
     if(g_view==VIEW_GROUP && g_drill_kind!=1 && g_scope_lvl==2){     /* one album of an artist / genre: its own stock queue */
         cfg_set_int("work_mode", mode); ui_set_workmode(mode);
         if(scope_play_album(g_scope_album, mode == 1 ? -2 : -1)) screen_show(SCR_NOWPLAYING);

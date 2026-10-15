@@ -4,6 +4,7 @@
 *.log
 
 # Compiled binaries (main UI + on-device tools)
+mq_ui
 ipodos-ui
 fbshot
 mqfeed

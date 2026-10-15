@@ -687,7 +687,7 @@ static const setting_t TABLE[] = {
     /* Audio/DAC cluster - cyclers with min=-1 so they can read "System default" (unmanaged):
      * until you pick a value diskOS sends nothing + the player keeps its own setting. */
     { "Audio",    "Working Mode", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_workmode, 0,
-      "Switch the audio source: local playback, USB DAC, Bluetooth receiving, or USB storage.", NULL },
+      "Switch the audio source: local playback, USB DAC, USB Audio, Bluetooth receiving, or USB storage.", NULL },
     { "Audio",    "Gain",        ST_CYCLER, "audio_gain",   0,0,0, OPT_GAIN, 2, NULL, apply_gain, 0,
       "Headphone output gain. High drives demanding headphones louder.", NULL },
     { "Audio",    "DAC Filter",  ST_CYCLER, "audio_filter", 0,0,0, OPT_DFILTER, 6, NULL, apply_dac_filter, 1,

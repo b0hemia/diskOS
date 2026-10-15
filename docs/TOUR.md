@@ -242,11 +242,11 @@ Playback controls what plays next and how the player treats a resumed track. Tap
 
 ### Settings: Audio and working mode
 
-Audio rows control the output path, DAC options, and volume limits. Tap Working Mode to choose Local Playback, USB DAC, Bluetooth Receiving, or USB Storage; the selected mode is marked in the list. USB Storage gives the computer the card: eject it safely there before returning to Local Playback. The SPDIF and external USB Audio controls are absent from the normal build.
+Audio rows control the output path, DAC options, and volume limits. Tap Working Mode to choose Local Playback, USB DAC, USB Audio, Bluetooth Receiving, or USB Storage; the selected mode is marked in the list. USB Storage gives the computer the card: eject it safely there before returning to Local Playback.
 
 | Row | Action and default |
 |---|---|
-| Working Mode | Open the four source modes; Local Playback is the usual music mode. |
+| Working Mode | Open the source modes (Local Playback, USB DAC, USB Audio on supported firmware, Bluetooth Receiving, USB Storage); Local Playback is the usual music mode. |
 | Gain | Low by default; choose High for a higher headphone gain. Unknown firmware says "Not on this firmware". |
 | DAC Filter | Slow LL by default; choose Fast LL, Slow PC, Fast PC, NOS, or Wideband. |
 | ReplayGain | Off by default; choose Track or Album leveling. |
@@ -428,6 +428,8 @@ still leave the previous track on screen.
 
 On V2.57, Wi-Fi can still be delayed or turned off after a restart when Bluetooth is saved on.
 If Wi-Fi is off, turn it on in Settings > Network > Wi-Fi; if it shows no IP, reconnect there.
+
+When using USB Audio mode, if the external DAC is unplugged, playback automatically pauses, the player safely re-routes to a null sink, and diskOS blocks playback commands until reconnected. Once the USB DAC is plugged back in, a normal tap on Play cleanly resumes playback from the paused position.
 
 ### Safety and stock UI
 

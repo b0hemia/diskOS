@@ -487,6 +487,9 @@ int ui_transport_command(const char *cmd)
     if(!ui_local_playback_allowed()){
         ui_toast("Return to local playback first"); return -1;
     }
+    if(ui_get_source_mode() == 4 && !ui_usb_dac_connected()){
+        ui_toast("USB DAC not connected"); return -1;
+    }
     ui_defer_sleep();
     if(is_next || is_prev){
         track_state_t st; ipc_get_state(&st);
@@ -2484,14 +2487,17 @@ void ui_update(const track_state_t *st)
 
     progress = (span > 0) ? (int32_t)(((long long)rel * 1000LL) / (long long)span) : 0;
 
+    int np_icon_playing = (st->state == 2);
+    if(ui_get_source_mode() == 4 && !ui_usb_dac_connected()) np_icon_playing = 0;
+
     /* seek echo-suppression: while the post-seek hold is active and the player
      * is still streaming a stale (far-from-target) position, keep the arc and
      * times pinned at the seeked target instead of snapping back. */
     if(g_seek_hold_until) {
         long d = pos - g_seek_target_ms; if(d < 0) d = -d;   /* ABSOLUTE ms gap - unaffected by a chapter-window flip at a seek-to-boundary */
         if(lv_tick_get() < g_seek_hold_until && d > 3000) {
-            ui_pp_glyph(btn_pp, ui_pp_icon_playing(st->state == 2));
-            if(theme_kit()->np_state) theme_kit()->np_state(ui_pp_icon_playing(st->state == 2), 1);   /* keep the words with the glyph */
+            ui_pp_glyph(btn_pp, ui_pp_icon_playing(np_icon_playing));
+            if(theme_kit()->np_state) theme_kit()->np_state(ui_pp_icon_playing(np_icon_playing), 1);   /* keep the words with the glyph */
             return;   /* ignore this stale echo */
         }
         g_seek_hold_until = 0; g_seek_target_ms = -1;   /* caught up or window lapsed */
@@ -2511,8 +2517,8 @@ void ui_update(const track_state_t *st)
     set_label_text_changed(t_remain, remain_buf);
     set_progress_changed(progress);
 
-    ui_pp_glyph(btn_pp, ui_pp_icon_playing(st->state == 2));
-    if(theme_kit()->np_state) theme_kit()->np_state(ui_pp_icon_playing(st->state == 2), 1);
+    ui_pp_glyph(btn_pp, ui_pp_icon_playing(np_icon_playing));
+    if(theme_kit()->np_state) theme_kit()->np_state(ui_pp_icon_playing(np_icon_playing), 1);
 }
 
 /* ---- volume overlay: a draggable arc on lv_layer_top (shows over any screen).

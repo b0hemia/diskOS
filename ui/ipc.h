@@ -72,4 +72,5 @@ unsigned ipc_generation(void);         /* bumps on each /ui reattach (player res
  * *poweroff_seq bumps per frame), with their generation under one lock. Reattach clears both counters
  * and sets *on to -1 (no screen frame yet). Counters also start at 0 at startup. */
 void ipc_screen_snapshot(int *on, unsigned *scr_seq, unsigned *poweroff_seq, unsigned *generation);
+int  ipc_tip_event(unsigned *seq);     /* last a60a TIP_INFO_EVENT (0x0212=connect, 0x0213=disconnect) */
 #endif

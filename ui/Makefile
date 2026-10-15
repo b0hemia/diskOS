@@ -21,7 +21,7 @@ FP_FLAGS := -ffp-contract=off
 CFLAGS := -Os -pipe -std=gnu11 -static -pthread -D_GNU_SOURCE -DLV_CONF_INCLUDE_SIMPLE \
   -ffunction-sections -fdata-sections \
   -I$(APP) -I$(NUI) -Wall -MMD -MP $(REPRO_FLAGS) $(FP_FLAGS)
-# Device-test builds only: make clean && make EXTRA_CFLAGS=-DDISKOS_TEST_OUTPUTS (shows SPDIF Output + USB Audio)
+# Device-test builds only: make clean && make EXTRA_CFLAGS=-DDISKOS_TEST_OUTPUTS (shows SPDIF Output)
 CFLAGS += $(EXTRA_CFLAGS)
 CFLAGS += -I$(NUI)/third_party/freetype-2.13.3/include
 # --gc-sections drops every provably-unreferenced function/data section at link (unused LVGL fonts,

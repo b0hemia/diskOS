@@ -46,5 +46,6 @@ int fw_power_key_driveable(void);
 int fw_artist_class_settable(void);
 int fw_folder_jump_settable(void);    /* 0687 = folder jump (V2.28/V2.40/V2.57) */
 int fw_track_display_settable(void);  /* 064d = track display (V2.40/V2.57) */
+int fw_has_usb_audio_out(void);       /* 1 = firmware supports external USB Audio host mode (0642 5 + 0666 3) */
 
 #endif /* FWCAPS_H */

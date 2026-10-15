@@ -97,7 +97,7 @@ int main(int argc, char **argv){
             else:
                 self.assertEqual(lines[1], f"{base}/{expected}:/bin:/usr/bin")
                 guard = Path(base) / expected / "rm"
-                payload = Path(__file__).resolve().parents[3] / "installer/payload/diskos-rmguard"
+                payload = Path(__file__).resolve().parents[2] / "payload/diskos-rmguard"
                 self.assertEqual(guard.read_bytes(), payload.read_bytes())
 
     def test_real_rm_does_not_count_as_guard(self):

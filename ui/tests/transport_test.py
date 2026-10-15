@@ -24,6 +24,9 @@ static char *btn_pp="";
 static char toast[100],glyph[20];
 static void ui_note_transport_sent(void){}
 static int modes_output_busy(void){ return 0; }   /* no output switch in flight: the transport path is under test */
+static int source_mode = 0, dac_connected = 1;
+static int ui_get_source_mode(void){ return source_mode; }
+static int ui_usb_dac_connected(void){ return dac_connected; }
 static int cancel_ok=1,cancels; static int scanner_cancel(void){ cancels++; return cancel_ok; }   /* Rescan during a scan = Stop */
 typedef struct { char path[40]; long position_ms,duration_ms; } track_state_t;
 static track_state_t state;
@@ -67,6 +70,16 @@ int main(void){
     assert(ui_transport_command("0201000C0001")<0);
     assert(commands==sent && seeks==0);
     puts("PASS no optimistic success on IPC failure and no commands during USB ownership");
+
+    local=1; source_mode=4; dac_connected=0; sent=commands;
+    assert(ui_transport_command("0201000C0000")<0);
+    assert(!strcmp(toast,"USB DAC not connected") && commands==sent);
+    assert(ui_transport_command("0201000C0001")<0 && commands==sent);
+    assert(ui_transport_command("0201000C0002")<0 && commands==sent);
+    dac_connected=1; send_fail=0;
+    assert(ui_transport_command("0201000C0000")==0 && commands==sent+1);
+    source_mode=0; sent=commands;
+    puts("PASS commands blocked when USB DAC unplugged in DAC output mode");
 
     local=1; send_fail=0; book=1; state.position_ms=10000;state.duration_ms=20000;
     assert(ui_transport_command("0201000C0002")==0 && requested_seek==0);

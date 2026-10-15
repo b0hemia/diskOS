@@ -66,13 +66,14 @@ void colorpick_create(lv_obj_t *root);    /* accent colour picker screen */
 void colorpick_open(void);                /* seed sliders from cfg + show */
 void modes_create(lv_obj_t *root);        /* Working Mode (audio source) picker screen */
 void modes_open(void);                     /* refresh selection + show SCR_WORKMODE */
-/* source/working mode: 0=Local 1=USB-DAC 2=BT-Receiving 3=USB-Storage */
-int  ui_set_source_mode(int mode);         /* replay the stock V2.28 switch sequence; 0=ok -1=bad arg */
+/* source/working mode: 0=Local 1=USB-DAC 2=BT-Receiving 3=USB-Storage 4=USB-DAC-Output */
+int  ui_set_source_mode(int mode);         /* replay the stock switch sequence; 0=ok -1=bad arg */
 int  ui_get_source_mode(void);
 int  ui_source_switch_pending(void);
 int  ui_source_switch_failed(void);
 int ui_local_playback_allowed(void);
-int  ui_detect_source_mode(void);          /* M17: the ACTUAL mode from the USB gadget state (0/1/3; BT reads as 0) */
+int  ui_detect_source_mode(void);          /* detect actual mode from USB gadget/ALSA state (0/1/3/4; BT reads as 0) */
+int  ui_usb_dac_connected(void);          /* 1 when external USB DAC is connected and detected */
 void npmenu_set(const track_state_t *st, int playing, const void *thumb_src);
 void npmenu_close_transients(void);   /* dismiss lv_layer_top popups on navigation */
 void ui_set_favorite(int on);   /* love/unlove the current song (0104) */

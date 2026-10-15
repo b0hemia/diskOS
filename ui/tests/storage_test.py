@@ -48,6 +48,8 @@ with tempfile.TemporaryDirectory(prefix="diskos-storage-tests-") as tmp:
 #include <stdatomic.h>
 #include <assert.h>
 #include "sdio.h"
+#include "fwcaps.h"
+int fw_has_usb_audio_out(void){ return 1; }
 typedef void lv_timer_t;
 static uint32_t test_clock;
 static int test_mounted=1, test_exported, test_host, test_guarded=1, test_scan;

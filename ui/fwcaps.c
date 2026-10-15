@@ -84,6 +84,9 @@ int fw_folder_jump_settable(void){ int v = fw_os_ver(); return v == 228 || v == 
 /* 064d = player_handle_set_track_display on V2.40 0x4e8b24 and V2.57 0x4f1cf8; no 064d tag on V2.09/V2.28. The player
  * only stores it (stock's own UI draws the numbers), so diskOS's Track Numbers works everywhere and sends it here. */
 int fw_track_display_settable(void){ int v = fw_os_ver(); return v == 240 || v == 257; }
+/* USB DAC host mode output (DWC2 host OTG + USB_HOST out_dev + SGM41513 5V boost).
+ * Supported and verified on V2.40 and V2.57 (0642 5 + 0666 3 + 0657 8). Older versions (V2.09, V2.28) do not support it. */
+int fw_has_usb_audio_out(void){ int v = fw_os_ver(); return v == 240 || v == 257; }
 
 const char *fw_gain_tag(void){
     int v = fw_os_ver();

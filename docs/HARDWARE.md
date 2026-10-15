@@ -193,10 +193,9 @@ userspace stack and the connected device; see [COMMAND_MAP.md](COMMAND_MAP.md).
 | Controller | **DWC2 OTG** (`13500000.otg_new`) - **dual-role** (host *or* device) |
 | Serial gadget | `serial_demo` exposing **ACM** (VID 0x0525 / PID 0xa4a7); the passwordless serial shell is limited to dev builds |
 | USB-DAC mode | stock "UAC" work-mode reconfigures the gadget to **USB Audio Class** (device-as-DAC for a host PC) |
+| USB Audio | stock V2.40/V2.57 "USB AUDIO" work-mode switches DWC2 to **USB host mode**, turns on SGM41513 5V VBUS OTG boost, and routes audio out to an external USB DAC via `snd-usb-audio` |
 
-The stock player provides a USB host audio route for an external USB DAC,
-pairing output route `0666=3` with gadget selector `0642=5`. diskOS contains
-this route, but its USB Audio control is absent from normal builds.
+**USB Host Mode (V2.40 / V2.57):** DWC2 OTG host mode is supported in V2.40 and V2.57 firmware (`0642000C0005` gadget selector + `0666000C0003` output route). The device powers the external DAC with 5V via the SGM41513 battery charger/boost controller and outputs digital audio over USB-C. diskOS exposes this under Working Mode as "USB Audio".
 The stock player also provides a `storage_demo` card-reader gadget. Do not
 mount or access the SD locally while it is exported to a computer;
 concurrent access can corrupt the card.
@@ -227,7 +226,7 @@ concurrent access can corrupt the card.
 | I2S rate | 768k/64b/8ch | <=384k/DSD256 (DAC-limited) | none beyond DAC; already maxes the DAC |
 | DSD native + DoP | Yes | Yes | parity - reuse driver ioctls |
 | Quad balanced DACs | Yes | Yes | direct ioctl control for bit-perfect / HW volume |
-| USB host (OTG) | Yes | USB host audio route | External USB DAC route exists in source; control absent from normal builds |
+| USB host (OTG) | Yes | Yes in V2.40/V2.57 (USB AUDIO) | Implemented in diskOS as USB Audio (mode 4) |
 | UAC2 gadget | Yes | Yes (UAC mode) | expose/control USB-DAC from diskOS |
 | USB-C PD | Yes (AW35615) | Charging | Power-role UI |
 | Physical keys | Yes (x2000_key) | Yes | map HW buttons in diskOS |
