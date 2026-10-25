@@ -39,7 +39,7 @@ class BaseRefused(FlashError):
 # Identified by its exact SHA-256 - not by a code offset - so an older writer that would ignore the base plan can
 # never be started. Its descriptor (magic "DGWD") must also agree on protocol, variant and capacity.
 WRITER_NAME = "my_write6_dram.bin"
-WRITER_SHA256 = "a3c3aa63e0c48f501181d542d9fa0526d36ded81e2e767f0c044af876674ea84"
+WRITER_SHA256 = "105f95bbd560f8f00596f55ca4de0b99750e7b29e0030225efbaaa24578b3a0d"
 PLAN_ADDR = "0xa0b00000"
 
 IMG_SIZE = 100663296
