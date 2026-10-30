@@ -68,7 +68,9 @@ def validate_stock_rootfs(stock_squashfs, rep=None, allow_override=True):
     version.in - cheap enough to run on every path. DISKOS_ALLOW_UNTESTED_FW=1 relaxes E221/E224."""
     rep = rep or CLIReporter()
     import hashlib, tempfile, shutil
-    unsq = bundle.native("unsquashfs")
+    unsq = (_selected_squashfs_pair[1]
+            if bundle.platform_probe.host()[0] == "linux" and _selected_squashfs_pair
+            else bundle.native("unsquashfs"))
     with open(stock_squashfs, "rb") as f:
         if f.read(4) != SQUASH_MAGIC:
             raise BuildError("not a squashfs image (bad magic) - not a Snowsky Disc rootfs", code="E220")
@@ -837,7 +839,58 @@ def _run(cmd, msys_paths=(), **kw):
     return subprocess.run(cmd, env=env, **kw)
 
 
+# A capability-qualified Linux fallback belongs to this process run. Keep it out
+# of bundle.native: native resolution must continue to expose broken vendor files.
+_selected_squashfs_pair = None
+
+
+def _squashfs_tools():
+    if bundle.platform_probe.host()[0] == "linux" and _selected_squashfs_pair:
+        return _selected_squashfs_pair
+    unsq = bundle.native("unsquashfs")
+    return bundle.native("mksquashfs"), unsq
+
+
+def _check_squashfs_pair(mksq, unsq, probe, rep):
+    global _selected_squashfs_pair
+    linux = bundle.platform_probe.host()[0] == "linux"
+    if linux and _selected_squashfs_pair:
+        mksq, unsq = _selected_squashfs_pair
+    try:
+        if linux and bundle.is_vendored(mksq) != bundle.is_vendored(unsq):
+            raise BuildError("squashfs LZO capability check failed: incomplete bundled pair",
+                             code="E104", action="install squashfs-tools with LZO support, or "
+                             "repair/rebuild both bundled tools with " + bundle.native_build_script("squashfs"))
+        probe(mksq, unsq)
+    except BuildError as original:
+        if (original.code != "E104" or not linux or
+                not any(bundle.is_vendored(p) for p in (mksq, unsq))):
+            raise
+        # Explicit retry AFTER capability failure; never combine tool origins.
+        pair = tuple(bundle._which_abs(name) for name in ("mksquashfs", "unsquashfs"))
+        vendor_real = os.path.realpath(bundle.vendor_dir())
+        if not all(pair) or any(
+                bundle.is_vendored(p) or
+                os.path.commonpath((os.path.realpath(p), vendor_real)) == vendor_real
+                for p in pair):
+            raise
+        try:
+            probe(*pair)
+        except (BuildError, OSError, ValueError, subprocess.SubprocessError):
+            raise original from None  # preserve the original message and repair hint
+        _selected_squashfs_pair = pair
+        (rep or CLIReporter()).log(
+            f"Bundled squashfs capability check failed ({original}); "
+            f"using system squashfs-tools pair for this run: {pair[0]} + {pair[1]}")
+
+
 def check_squashfs_tools(mksq, unsq, rep=None):
+    """Check LZO capability, explicitly selecting a Linux system pair on failure."""
+    _check_squashfs_pair(mksq, unsq,
+                         lambda mk, un: _probe_squashfs_tools(mk, un, rep), rep)
+
+
+def _probe_squashfs_tools(mksq, unsq, rep=None):
     """Prove the resolved squashfs tools can actually PACK and EXTRACT with the exact
     stock LZO parameters, BEFORE the real build touches the firmware. A system mksquashfs
     built without LZO (or an otherwise broken tool) fails here with a clear, actionable
@@ -1161,6 +1214,12 @@ def validate_stock_archive(stock_squashfs, unsq, spool_root, rep=None, allow_ove
 
 
 def check_archive_squashfs_tools(mksq, unsq, spool_root, rep=None):
+    """Check pseudo support with the same explicit Linux pair fallback policy."""
+    _check_squashfs_pair(mksq, unsq,
+                         lambda mk, un: _probe_archive_squashfs_tools(mk, un, spool_root, rep), rep)
+
+
+def _probe_archive_squashfs_tools(mksq, unsq, spool_root, rep=None):
     """Opt-in pseudo pack/export capability check with stock LZO parameters."""
     import tempfile
     from .pseudofs import MARK
@@ -1379,8 +1438,7 @@ def build_image(stock_squashfs, ui_binary, variant, out_bin, workdir, rep=None, 
     ota_cfg = resolve_ota_config(ota_rootpub, min_key_epoch, min_ui_epoch, no_ota)     # BEFORE any heavy work: a bad key fails fast
     rep.log("OTA updates: " + describe_ota(ota_cfg))
 
-    unsq = bundle.native("unsquashfs")
-    mksq = bundle.native("mksquashfs")
+    mksq, unsq = _squashfs_tools()
     # A fresh identity belongs to this image, including same-version rebuilds.
     flash_id = (secrets.token_hex(16) + "\n").encode("ascii")
     if host == "windows":
@@ -1389,6 +1447,8 @@ def build_image(stock_squashfs, ui_binary, variant, out_bin, workdir, rep=None, 
     # Prove the resolved squashfs tools can pack+extract with the stock LZO params BEFORE
     # unpacking the firmware - so a system tool without LZO fails cleanly, not mid-build.
     check_squashfs_tools(mksq, unsq, rep)
+    if host == "linux" and _selected_squashfs_pair:
+        mksq, unsq = _selected_squashfs_pair
     with _case_sensitive_extract_root(workdir, rep) as extract_root:
         rf = os.path.join(extract_root, "rf")
         if os.path.isdir(rf):

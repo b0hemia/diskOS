@@ -10,7 +10,7 @@ to the corresponding source that ships alongside the binaries. The full verbatim
 | Component | Purpose | License | Source |
 |---|---|---|---|
 | **usbboot** | Ingenic X2000 mask-ROM USB loader (the flasher front-end) | **GPL-2.0-or-later** - (c) 2021 Aidan MacDonald, (c) 2015 Amaury Pouly | included: `src/usbboot/` (built from this) |
-| **mksquashfs / unsquashfs** | build/extract the rootfs image | **GPL-2.0-or-later** | Linux: 4.6.1 in `corresponding-source/squashfs-tools_4.6.1*`; macOS arm64: 4.7.5 in `corresponding-source/macos-arm64/` |
+| **mksquashfs / unsquashfs** | build/extract the rootfs image | **GPL-2.0-or-later** | Linux: 4.6.1 in `corresponding-source/linux-squashfs-musl/`; macOS arm64: 4.7.5 in `corresponding-source/macos-arm64/` |
 | **dropbearmulti** (Dropbear SSH **2022.83**) | embedded in the diskOS image; started by the opt-in Debug Mode for SSH-over-WiFi | **MIT-style** ((c) 2002-2020 Matt Johnston; components under MIT/BSD/public-domain) - text in `licenses/LICENSE-dropbear.txt` | https://matt.ucc.asn.au/dropbear/dropbear.html (v2022.83; **predates the CVE-2023-48795 "Terrapin" Strict-KEX mitigation**. Use Debug Mode only for short sessions on a trusted network and turn it off when finished.) |
 
 `usbboot` and squashfs-tools are **GPL-2.0-or-later**, so anyone redistributing them must make their
@@ -19,16 +19,17 @@ no source-availability obligation, only its license text as noted above.) **For 
 corresponding source ships in-tree and in every release tarball**, so it travels from the same place
 as the binaries (GPL-2.0 section 3(a), plus the "same place" provision in section 3's final paragraph):
 `usbboot`'s own source is `src/usbboot/usbboot.c`;
-**Linux squashfs-tools 4.6.1** source is `corresponding-source/squashfs-tools_4.6.1*`. The macOS arm64 4.7.5 source, Homebrew patch, dependency sources and formulas are in `corresponding-source/macos-arm64/`. The Linux tools are rebuilt by
+**Linux squashfs-tools 4.6.1** source is `corresponding-source/linux-squashfs-musl/squashfs-tools-4.6.1.tar.gz`. The macOS arm64 4.7.5 source, Homebrew patch, dependency sources and formulas are in `corresponding-source/macos-arm64/`. The Linux tools are rebuilt by
 `build/build-usbboot-pinned.sh` / `build/build-squashfs-static.sh`.
 
 **Static linking (Linux):** the prebuilt Linux `usbboot`, `mksquashfs`, and `unsquashfs` are shipped
-**fully statically linked** (built with `gcc -static`). They therefore statically
-incorporate:
+**fully statically linked**. They therefore statically incorporate:
 - **upstream libusb-1.0.27 (LGPL-2.1-or-later)** - in `usbboot`, from the shipped
   `.orig` archive; the Debian patch is not applied
-- **liblzo2 2.10 (GPL-2.0-or-later)**, **zlib**, **liblzma** (permissive) - in squashfs-tools
-- the **GNU C Library (glibc, LGPL-2.1-or-later)** - `2.39-0ubuntu8.8`, in all three
+- the **GNU C Library (glibc, LGPL-2.1-or-later)** - `2.39-0ubuntu8.8`, in `usbboot`
+- **LZO 2.10 (GPL-2.0-or-later)**, **zlib 1.3.2**, **liblzma (xz 5.8.4)** (permissive) and the **musl 1.2.5**
+  C library (MIT, `licenses/MIT-musl.txt`) - in `mksquashfs`/`unsquashfs`, all built from the archives in
+  `corresponding-source/linux-squashfs-musl/`
 
 The Linux x86-64 usbboot release recipe builds offline in a frozen rootless
 Podman image (`--network=none --pull=never`). It asserts exactly
@@ -46,15 +47,15 @@ Confirm the incorporated members and notices against the candidate link map.
 Because liblzo2 is GPL, the resulting `mksquashfs`/`unsquashfs` binaries are effectively GPL-2.0. The
 corresponding source for the statically-linked **GPL/LGPL** libraries is provided so their section 3/section 6
 obligations are met:
-- **liblzo2** (`corresponding-source/lzo2_2.10*`) and **libusb-1.0** (`corresponding-source/libusb-1.0_1.0.27*`)
-  ship in-tree.
-- **glibc** (statically linked, so it travels inside the binary): the **complete corresponding source**
-  is vendored in `corresponding-source/glibc_2.39*` (the exact version the shipped binaries were built
-  against). Because it is statically linked it does not qualify for the "system library" exception, so
+- **LZO** (`corresponding-source/linux-squashfs-musl/lzo-2.10.tar.gz`, also `corresponding-source/lzo2_2.10*`)
+  and **libusb-1.0** (`corresponding-source/libusb-1.0_1.0.27*`) ship in-tree.
+- **glibc** (statically linked into `usbboot`, so it travels inside the binary): the **complete
+  corresponding source** is vendored in `corresponding-source/glibc_2.39*` (the exact version the shipped
+  binary was built against). Because it is statically linked it does not qualify for the "system library" exception, so
   its source ships alongside the binaries like the others.
 
 **Relink path (satisfies LGPL-2.1 section 6 for libusb *and* glibc):** we ship the **complete source** of
-`usbboot` (`src/usbboot/usbboot.c`) and squashfs-tools (`corresponding-source/squashfs-tools_4.6.1*`)
+`usbboot` (`src/usbboot/usbboot.c`) and squashfs-tools (`corresponding-source/linux-squashfs-musl/`)
 plus the exact Linux build recipes (`build/build-usbboot-pinned.sh`, `build/build-squashfs-static.sh`). A
 user can therefore rebuild and relink these tools against a **modified** libusb, liblzo2, **or glibc**
 of their choosing - the freedom section 6 exists to protect. See

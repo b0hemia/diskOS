@@ -1,7 +1,8 @@
 musl libc - license
 ====================
 
-The diskOS UI binary (`payload/mq_ui`) is statically linked against musl libc.
+The diskOS UI binary (`payload/mq_ui`) and the Linux installer's `mksquashfs` / `unsquashfs`
+(`vendor/linux-x86_64/`) are statically linked against musl libc.
 musl as a whole is licensed under the following standard MIT license:
 
 ----------------------------------------------------------------------

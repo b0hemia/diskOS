@@ -14,9 +14,9 @@ bundles. See `../NOTICE.md` for the component->license mapping and the static-li
 | lz4 1.10.0 library (macOS arm64 dylib) | BSD-2-Clause | [`BSD-2-Clause-lz4.txt`](BSD-2-Clause-lz4.txt), [`LZ4-LICENSE.txt`](LZ4-LICENSE.txt), copied from the source tarball |
 | xz 5.8.4 liblzma (macOS arm64 dylib) | 0BSD; source also contains GPL-2.0-or-later parts | [`0BSD-xz.txt`](0BSD-xz.txt), [`XZ-COPYING.txt`](XZ-COPYING.txt), [`GPL-2.0.txt`](GPL-2.0.txt) |
 | zstd 1.5.7 library (macOS arm64 dylib) | BSD-3-Clause or GPL-2.0-only; source also has MIT/BSD-2-Clause parts | [`BSD-3-Clause-zstd.txt`](BSD-3-Clause-zstd.txt), [`GPL-2.0-zstd.txt`](GPL-2.0-zstd.txt); full source in `../corresponding-source/macos-arm64/` |
-| glibc (static in usbboot/mksquashfs/unsquashfs) | LGPL-2.1-or-later | [`LGPL-2.1.txt`](LGPL-2.1.txt); corresponding source in `../corresponding-source/glibc_2.39*` (see `../NOTICE.md` for the relink path) |
+| glibc (static in Linux usbboot) | LGPL-2.1-or-later | [`LGPL-2.1.txt`](LGPL-2.1.txt); corresponding source in `../corresponding-source/glibc_2.39*` (see `../NOTICE.md` for the relink path) |
 | PyInstaller bootloader (Windows package and self-built onefile) | GPL-2.0 + bootloader exception | [`PyInstaller-COPYING.txt`](PyInstaller-COPYING.txt), [`GPL-2.0.txt`](GPL-2.0.txt) + exception note in `../NOTICE.md` |
-| zlib / liblzma (static in squashfs-tools) | zlib / public-domain | permissive notices accompany the library sources; see `../corresponding-source/README.md` |
+| zlib 1.3.2 / liblzma (xz 5.8.4) (static in Linux squashfs-tools) | zlib / 0BSD | notices accompany the sources in `../corresponding-source/linux-squashfs-musl/`; see also [`0BSD-xz.txt`](0BSD-xz.txt) and [`XZ-COPYING.txt`](XZ-COPYING.txt) |
 | pyusb | BSD-3-Clause | [`BSD-3-Clause-pyusb.txt`](BSD-3-Clause-pyusb.txt) (verbatim from pyusb 1.3.1) |
 | pycryptodome | BSD-2-Clause + public-domain; CC0 SipHash | [`pycryptodome-LICENSE.txt`](pycryptodome-LICENSE.txt) retains the upstream wording with LF newlines; [`PyCryptodome-3.23.0-Windows-LICENSE.rst`](PyCryptodome-3.23.0-Windows-LICENSE.rst) is the exact locked Windows wheel's CRLF copy. [`PyCryptodome-3.23.0-Windows-NOTICES.txt`](PyCryptodome-3.23.0-Windows-NOTICES.txt) preserves runtime-module notices and the wheel's OCB patent statement. Native source comments: [`PyCryptodome-3.23.0-Native-NOTICES.txt`](PyCryptodome-3.23.0-Native-NOTICES.txt); LibTomCrypt dedication: [`PyCryptodome-3.23.0-libtom-LICENSE.txt`](PyCryptodome-3.23.0-libtom-LICENSE.txt); complete SipHash dedication: [`CC0-1.0-SipHash.txt`](CC0-1.0-SipHash.txt) |
 | certifi 2026.2.25 | MPL-2.0 | [`MPL-2.0-certifi.txt`](MPL-2.0-certifi.txt), verbatim wheel bundle notice; complete licence: [`MPL-2.0.txt`](MPL-2.0.txt) |
@@ -47,7 +47,7 @@ bundles. See `../NOTICE.md` for the component->license mapping and the static-li
 | Noto Sans, Noto Sans Hebrew (Hebrew new in 1.2.2; `font_intl_14` to `font_intl_20` in `mq_ui`) | OFL-1.1 | [`OFL-1.1-NotoSans.txt`](OFL-1.1-NotoSans.txt) |
 | JSMN (diskOS UI JSON parser) | MIT | [`MIT-JSMN.txt`](MIT-JSMN.txt) (verbatim from `../ui/jsmn.h`, (c) 2010 Serge Zaitsev) |
 | Font Awesome Free glyphs (via LVGL `LV_SYMBOL_*`) | OFL-1.1 (fonts) + CC-BY-4.0 (icons) | [`OFL-1.1-FontAwesome.txt`](OFL-1.1-FontAwesome.txt) (Fonticons' own LICENSE.txt: full OFL-1.1 + MIT; also covers the diskOS Beam glyph U+F8D0, OFL-1.1) + [`CC-BY-4.0.txt`](CC-BY-4.0.txt) |
-| musl libc (static in diskOS UI `mq_ui`) | MIT | [`MIT-musl.txt`](MIT-musl.txt) |
+| musl libc (static in diskOS UI `mq_ui` and Linux `mksquashfs`/`unsquashfs`) | MIT | [`MIT-musl.txt`](MIT-musl.txt) |
 | LodePNG 20230410 (Cast artwork PNG encoder in `mq_ui`, via LVGL) | zlib | [`Zlib-LodePNG.txt`](Zlib-LodePNG.txt) (lines 1-24 of `lodepng.c`) |
 | gifdec (GIF decoder in `mq_ui`, via LVGL) | Public domain upstream; LVGL changes MIT | [`MIT-LVGL.txt`](MIT-LVGL.txt); upstream dedication: https://github.com/lecram/gifdec |
 | SQLite (amalgamation in `mq_ui`) | Public domain | https://sqlite.org/copyright.html (no license text required) |

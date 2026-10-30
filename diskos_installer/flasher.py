@@ -236,9 +236,16 @@ def _probe_helpers():
     """Confirm every bundled native tool can actually execute (and load its libs)
     BEFORE the destructive gate. Catches a noexec temp mount / missing dylibs while
     the device is still untouched. Non-zero exit is fine; an OSError is not."""
-    probes = [(bundle.native("usbboot"), ["--help"]),
-              (bundle.native("mksquashfs"), ["-version"]),
-              (bundle.native("unsquashfs"), ["-version"])]
+    usbboot = bundle.native("usbboot")
+    if platform_probe.host()[0] == "linux":
+        from .imagebuild import _squashfs_tools
+        mksq, unsq = _squashfs_tools()
+    else:
+        mksq = bundle.native("mksquashfs")
+        unsq = bundle.native("unsquashfs")
+    probes = [(usbboot, ["--help"]),
+              (mksq, ["-version"]),
+              (unsq, ["-version"])]
     for path, args in probes:
         try:
             subprocess.run([path] + args, env=bundle.native_env(path),

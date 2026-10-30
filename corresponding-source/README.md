@@ -6,35 +6,60 @@ statically link, **GPL-2.0** / **LGPL-2.1** code. To satisfy those licenses this
 the source travels **from the same place** as the binaries (GPL-2.0 section 3(a) + the "same place" clause
 in section 3's final paragraph; LGPL-2.1 section 6(a)/(d)).
 
-Each item below is a full Debian source package (`.orig` upstream tarball + `.debian` packaging +
-`.dsc`); extract with `dpkg-source -x <name>.dsc` (or unpack the `.orig` tarball directly).
+Items named `<name>_<version>*` are full Debian source packages (`.orig` upstream tarball + `.debian`
+packaging + `.dsc`); extract with `dpkg-source -x <name>.dsc` (or unpack the `.orig` tarball directly).
+Items under `linux-squashfs-musl/` are the exact upstream release archives.
 
 | Shipped binary | Component here | Version | License | Source files |
 |---|---|---|---|---|
-| `mksquashfs` / `unsquashfs` | **squashfs-tools** | 4.6.1-1build1 | GPL-2.0 | `squashfs-tools_4.6.1*` |
-| (statically linked into the above) | **liblzo2** (lzo2) | 2.10-2build4 | GPL-2.0-or-later | `lzo2_2.10*` |
+| Linux `mksquashfs` / `unsquashfs` | **squashfs-tools** | 4.6.1 | GPL-2.0 | `linux-squashfs-musl/squashfs-tools-4.6.1.tar.gz` |
+| (statically linked into the above) | **LZO** | 2.10 | GPL-2.0-or-later | `linux-squashfs-musl/lzo-2.10.tar.gz` |
+| (static C runtime of the above) | **musl** | 1.2.5 | MIT | `linux-squashfs-musl/musl-1.2.5.tar.gz` |
+| Windows `mksquashfs.exe` / `unsquashfs.exe` | squashfs-tools + LZO | 4.6.1 / 2.10 | GPL-2.0 | `squashfs-tools_4.6.1*`, `lzo2_2.10*` (see below) |
 | Linux `usbboot` | **upstream libusb-1.0** (statically linked) | 1.0.27 | LGPL-2.1-or-later | `libusb-1.0_1.0.27*` |
-| all three tools (static C runtime) | **glibc** | 2.39-0ubuntu8.8 | LGPL-2.1-or-later | `glibc_2.39*` |
+| Linux `usbboot` (static C runtime) | **glibc** | 2.39-0ubuntu8.8 | LGPL-2.1-or-later | `glibc_2.39*` |
 | `usbboot` | its own C source | - | GPL-2.0-or-later | `../src/usbboot/usbboot.c` |
 | `disc_spl_lpddr3.bin` | stage-1 SPL (u-boot-xburst) | see `../SPL_SOURCE.md` | GPL-2.0 | `../spl-src/` |
 
-Also statically linked into `mksquashfs`/`unsquashfs`: **zlib** and **liblzma/xz** - both permissive
-(zlib / 0BSD-public-domain), needing attribution only (see `../NOTICE.md`), not corresponding source.
+Also statically linked into the Linux `mksquashfs`/`unsquashfs`: **zlib 1.3.2** and **liblzma (xz 5.8.4)** -
+both permissive (zlib / 0BSD), needing attribution only (see `../NOTICE.md`); their source archives are
+in `linux-squashfs-musl/` as well.
 
 ## Rebuilding the binaries from this source
 
 The Linux release build recipes are in `../build/`:
 - `build/build-squashfs-static.sh` - static `mksquashfs`/`unsquashfs` (gzip+lzo+xz), with an LZO
-  round-trip self-test. Uses squashfs-tools + liblzo2 above.
+  round-trip self-test, built against musl (see "Linux squashfs tools" below).
 - `build/build-usbboot-pinned.sh` - offline, pinned Linux x86-64 `usbboot`, using
   upstream libusb 1.0.27 `.orig` with `--disable-udev --enable-static --disable-shared`.
   The Debian patch is not applied. The complete Debian source package is retained.
 
-The squashfs script fetches source via `apt-get source`. The pinned usbboot
-recipe uses only the local archives here and asserts all four glibc packages
+The pinned usbboot recipe uses only the local archives here and asserts all four glibc packages
 (`libc6`, `libc6-dev`, `libc-bin`, `libc-dev-bin`) are exactly `2.39-0ubuntu8.8`.
 The older `build-usbboot-static.sh` uses the host runtime and is not the release
 recipe. Source modifications and private relinking are described below.
+
+## Linux squashfs tools (musl)
+
+The Linux `mksquashfs` and `unsquashfs` are statically linked against **musl 1.2.5**, not glibc. A
+statically linked glibc still loads the host's name-service modules for user and group lookups, and on
+some distributions (for example Fedora 44) that crashed `mksquashfs` while it printed its summary.
+
+`build/build-squashfs-static.sh NEW_DIR` downloads the five upstream archives listed in
+`linux-squashfs-musl/SHA256SUMS`, checks each SHA256 before extracting, builds musl (its `musl-gcc`
+wrapper), LZO, zlib and liblzma as private static libraries, links `mksquashfs`/`unsquashfs` against
+them, checks that both are statically linked, and runs the installer's LZO pack/extract probe. It writes
+only to `NEW_DIR` (never to `vendor/`). No patches are applied. Host GCC and binutils are build
+prerequisites; the build is not claimed to be byte reproducible.
+
+`linux-squashfs-musl/` holds exactly those archives (`SHA256SUMS`), plus the upstream signatures
+for musl (`.asc`), zlib (`.asc`) and xz (`.sig`). `lzo-2.10.tar.gz` is byte-identical to
+`lzo2_2.10.orig.tar.gz` above.
+
+If the bundled pair ever fails the installer's capability check on Linux, the installer retries once
+with a complete system `mksquashfs`/`unsquashfs` pair from `PATH` (never a mix of bundled and system
+tools), uses that pair for the rest of the run only if it passes the same check, and logs that it did
+so. Otherwise the original error stands.
 
 ## Pinned Linux x86-64 usbboot build
 
