@@ -280,6 +280,133 @@ class InstallHookSupervisorTests(unittest.TestCase):
                         pass
 
 
+@unittest.skipUnless(os.name != 'nt' and os.access('/bin/sh', os.X_OK)
+                     and shutil.which('openssl'), 'needs POSIX shell and OpenSSL')
+class InstallHookOutcomeTests(unittest.TestCase):
+    """Run the shipped worker with private paths, real verification and signed trial bundles.
+
+    Extend the existing S97 host harness with private boot paths. The identity helper returns
+    ordinary boot; sync is a no-op. No device executable is run or host filesystem synced.
+    """
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='diskos-s97-outcome-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.data = self.root / 'data'
+        self.opt = self.root / 'opt'
+        self.etc = self.root / 'etc'
+        self.runtime = self.root / 'runtime'
+        self.bin = self.root / 'bin'
+        for path in (self.data, self.opt / 'bin', self.etc, self.runtime, self.bin):
+            path.mkdir(parents=True)
+        self.ui = b'\x7fELF\x01\x01' + b'\x00' * 12 + b'\x08\x00' + b'trial-build'
+        self.sha = hashlib.sha256(self.ui).hexdigest()
+        (self.etc / 'diskos_manifest').write_text(f'SHA256={self.sha}\nSIZE={len(self.ui)}\n')
+        self.executable(self.opt / 'bin/diskos-flashstate', '#!/bin/sh\nexit 0\n')
+        self.executable(self.bin / 'sync', '#!/bin/sh\nexit 0\n')
+        source = Path(__file__).resolve().parents[1] / 'payload/S97diskos_install'
+        text = source.read_text()
+        for old, new in (('/tmp/', str(self.runtime) + '/'),
+                         ('/usr/data', self.data), ('/opt/diskos', self.opt),
+                         ('/etc/diskos', self.etc / 'diskos')):
+            text = text.replace(old, str(new))
+        self.script = self.root / 'S97test'
+        self.executable(self.script, text)
+        (self.data / 'mq_ui').write_bytes(b'old-unverified-build')
+        (self.data / 'mq_player').symlink_to(self.data / 'mq_ui')
+
+    def executable(self, path, text):
+        path.write_text(text, encoding='ascii')
+        path.chmod(0o755)
+
+    def signed_trial(self):
+        ota = self.etc / 'diskos-ota'
+        ota.mkdir()
+        pending = self.data / 'updates/pending'
+        pending.mkdir(parents=True)
+        (pending / 'mq_ui').write_bytes(self.ui)
+        (pending / 'ready').touch()
+        (ota / 'epochs').write_text('MIN_KEY_EPOCH=1\nMIN_UI_EPOCH=1\n')
+        source = Path(__file__).resolve().parents[1] / 'payload/diskos-verify.sh'
+        shutil.copyfile(source, ota / 'diskos-verify.sh')
+        # Disposable test keys only, generated offline inside the fixture.
+        def openssl(*args):
+            subprocess.run(['openssl', *map(str, args)], check=True, capture_output=True)
+        key = self.root / 'test-key.pem'
+        openssl('ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', key)
+        openssl('pkey', '-in', key, '-pubout', '-out', pending / 'leafpub.pem')
+        shutil.copyfile(pending / 'leafpub.pem', ota / 'root.pub.pem')
+        pubsha = hashlib.sha256((pending / 'leafpub.pem').read_bytes()).hexdigest()
+        (pending / 'keyauthz').write_text('diskos-keyauthz-v1\nkeyid=test\nkeyepoch=1\n'
+                                         f'role=tier-a\npubkey_sha256={pubsha}\n')
+        (pending / 'update.manifest').write_text('diskos-update-v1\ncomponent=mq_ui\nepoch=2\n'
+                                                f'version=1.2.2\nsize={len(self.ui)}\n'
+                                                f'sha256={self.sha}\nchannel=stable\n')
+        for name in ('keyauthz', 'update.manifest'):
+            openssl('dgst', '-sha256', '-sign', key, '-out', pending / (name + '.sig'), pending / name)
+
+    def run_worker(self, expected=0):
+        result = subprocess.run(['/bin/sh', str(self.script), '__worker',
+                                 str(self.runtime / 'pid'), str(self.runtime / 'done')],
+                                env=dict(os.environ, PATH=f'{self.bin}:' + os.environ['PATH']),
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, expected, result.stderr)
+        return (self.data / 'diskos_install.log').read_text()
+
+    def test_verified_trial_replaces_unverified_old_ui(self):
+        self.signed_trial()
+        log = self.run_worker()
+        self.assertIn('verified -> trial boot 1', log)
+        self.assertIn('replacing unverified', log)
+        self.assertIn('with the verified build', log)
+        self.assertIn('final outcome -> diskOS override ready; UI launch pending', log)
+        self.assertNotIn('stock UI will run', log)
+        self.assertLess(log.index('quarantined'), log.index('replacing'))
+        self.assertLess(log.index('installed verified'), log.index('final outcome'))
+        self.assertEqual((self.data / 'mq_ui').read_bytes(), self.ui)
+        self.assertEqual((self.data / 'mq_player').resolve(), self.data / 'mq_ui')
+        self.assertTrue((self.runtime / '.diskos_ready').is_file())
+        self.assertIn('BUILD=trial', (self.runtime / '.diskos_run').read_text())
+        self.assertFalse((self.data / 'mq_ui.rejected').exists())
+
+    def test_no_verified_build_falls_back_to_stock(self):
+        log = self.run_worker()
+        self.assertIn('final outcome -> stock UI will run', log)
+        self.assertNotIn('diskOS override ready', log)
+        self.assertNotIn('replacing', log)
+        self.assertFalse((self.data / 'mq_player').exists())
+        self.assertFalse((self.runtime / '.diskos_ready').exists())
+        self.assertEqual((self.data / 'mq_ui.rejected').read_bytes(), b'old-unverified-build')
+
+    def test_quarantine_failure_remains_critical(self):
+        import shlex
+        for command in ('rm', 'mv'):
+            real = shutil.which(command)
+            self.executable(self.bin / command,
+                            '#!/bin/sh\nfor arg do\ncase "$arg" in ' +
+                            shlex.quote(str(self.data)) + '/mq_ui|' +
+                            shlex.quote(str(self.data)) + '/mq_player) exit 1;; esac\ndone\nexec ' +
+                            shlex.quote(real) + ' "$@"\n')
+        log = self.run_worker(expected=1)
+        self.assertIn('CRITICAL: could NOT disable diskOS override', log)
+        self.assertNotIn('stock UI will run', log)
+        self.assertFalse((self.runtime / '.diskos_ready').exists())
+
+    def test_fast_path_reports_final_diskos(self):
+        (self.data / 'mq_ui').write_bytes(self.ui)
+        log = self.run_worker()
+        self.assertIn('final outcome -> diskOS override ready; UI launch pending', log)
+        self.assertNotIn('stock UI will run', log)
+
+    def test_missing_manifest_reports_stock(self):
+        (self.etc / 'diskos_manifest').unlink()
+        log = self.run_worker()
+        self.assertIn('quarantined (no manifest)', log)
+        self.assertIn('final outcome -> stock UI will run', log)
+        self.assertFalse((self.runtime / '.diskos_ready').exists())
+
+
 class ReadinessGateTests(unittest.TestCase):
     """A worker that never completes must not leave the override launchable."""
 
