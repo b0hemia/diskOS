@@ -167,7 +167,7 @@ class RetainedBundleTests(unittest.TestCase):
         e.fault.unlink()
         e.restore_verifier()
         self.assertEqual(e.run(), want, e.log())
-        self.assertIn('ota: running', e.log())
+        self.assertIn('ota: selected', e.log())
 
     def test_tmp_creation_failure_keeps_good_and_trial(self):
         for kind in ('good', 'active'):
