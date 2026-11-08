@@ -18,9 +18,9 @@
  * left holding a track the controller no longer owns (the session's media STOP waits for the pending LOAD, then ends the media). */
 #define CC_ACT_MAX 4
 enum { CC_EV_NONE = 0, CC_EV_ENTER, CC_EV_SNAPSHOT, CC_EV_LOAD_STARTED, CC_EV_LOAD_REFUSED, CC_EV_NEXT, CC_EV_PREV, CC_EV_SELECT, CC_EV_MODE, CC_EV_LOCAL,
-       CC_EV_JUMP /* slice 14f: Up Next tap: qgen + occ (a base index) */ };
+       CC_EV_JUMP /* slice 14f: Up Next tap: qgen + occ (a base index) */, CC_EV_PLAY /* explicit restart of a stopped current occurrence */ };
 enum { CC_A_NONE = 0, CC_A_LOAD, CC_A_PLAY_AFTER_ADOPT, CC_A_STAY_PAUSED, CC_A_TOAST, CC_A_REPUBLISH,
-       CC_A_STOP_MEDIA /* slice 14e1: an older LOAD may still land on the receiver: stop it (cb_stop) */ };
+       CC_A_STOP_MEDIA /* slice 14e1: an older LOAD may still land on the receiver: stop it (cb_stop) */, CC_A_STOPPED /* receiver stopped current occurrence, no toast or STOP */ };
 enum { CC_T_NONE = 0, CC_T_LIST_FAILED /* "Couldn't play that list" */, CC_T_UPDATING /* "Queue is updating - try again" */,
        CC_T_COULD_NOT_PLAY /* "Receiver could not play this track" */, CC_T_QUEUE_FINISHED, CC_T_UNSUPPORTED, CC_T_NONE_PLAYABLE,
        CC_T_QUEUE_CHANGED /* "Queue changed" (14f) */ };   /* ids; the strings are slice 15/17 */
@@ -53,7 +53,7 @@ typedef struct cast_ctl cast_ctl;
 typedef struct { cast_ctl *c; cast_queue q; cast_cursor cur; } cc_slot;   /* two slots: a new queue is built beside the old one, then swapped */
 struct cast_ctl {
     cast_ctl_deps d; cc_slot s[2]; int a;
-    int active, pend, known, playing, settle, wp, orph, out, prior;   /* pend/known: a LOAD is out / its load_seq is reported; playing: receiver playing intent; wp: play after adopt;
+    int active, pend, known, playing, settle, wp, orph, out, prior, stopped;   /* pend/known: a LOAD is out / its load_seq is reported; playing: receiver playing intent; wp: play after adopt;
                                                                    * out: set around one cursor move while the receiver holds media this move abandons; prior: the pending LOAD replaced something that may still sit on the receiver */
     uint32_t qgen, pgen, now, pdue; unsigned pseq;   /* orph: an older LOAD may still land (its queue was replaced) */
     cc_row row;

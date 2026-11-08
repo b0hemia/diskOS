@@ -63,11 +63,12 @@ int  ota_fetch_release(const ota_paths_t *p, char *tag, size_t n, int *has_bundl
 int  ota_fetch_release_cancel(const ota_paths_t *p, char *tag, size_t n, int *has_bundle, const _Atomic int *cancel);
 int  ota_wifi_down(const ota_paths_t *p);                             /* 1 = the Wi-Fi interface reports "down" */
 int  ota_supported(const ota_paths_t *p);                             /* 1 = RO verifier + root key + epochs are present */
-int  ota_stage(const ota_paths_t *p, const char *running, const char *tag, ota_prog_t *pg);   /* blocking; OTA_* */
+int  ota_stage(const ota_paths_t *p, const char *running, const char *tag, ota_prog_t *pg);   /* blocking; OTA_*; caller checks ota_allowed() on the UI thread */
 int  ota_allowed(void);                                               /* 1 = Settings > Device > Allow diskOS Updates is on (cfg ota_allow, default on) */
 int  ota_discard_pending(const ota_paths_t *p);                       /* 1 = <updates>/pending (and pending.old) is gone; touches nothing else */
 int  ota_pending(const ota_paths_t *p, char *ver, size_t n);          /* 1 = a verified bundle waits for boot */
 int  ota_trial_version(const ota_paths_t *p, char *ver, size_t n);    /* 1 = this boot is a trial (run + launched files agree); cheap, no hashing */
+int  ota_trial_maybe_me(const ota_paths_t *p);                        /* 0 = the running exe is certainly not the trial (size differs); cheap */
 /* 1 = boot recognizes healthy/revert for this running trial (ota.c boot_marker_matches).
  * Single intentional divergence from boot: at most 64 KiB total bytes per marker,
  * including NULs; cap reached before LF/EOF means no valid decision (prompt may

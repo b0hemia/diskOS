@@ -61,19 +61,28 @@ static int spawn(aps_sender *a){
     if(!pid){
         sigset_t none; sigemptyset(&none); sigprocmask(SIG_SETMASK, &none, NULL); setpgid(0, 0);
         int fd = fcntl(sockets[1], F_DUPFD, 10), broker = fcntl(decoder[1], F_DUPFD, 10);
-        if(fd < 0 || broker < 0 || dup2(fd, 3) < 0 || dup2(broker, 4) < 0 || isolate()) _exit(126);
+        if(fd < 0 || broker < 0 || dup2(fd, 3) < 0 || dup2(broker, 4) < 0 || isolate()){
+            static const char msg[] = "AirPlay worker end reason=descriptor setup failed\n";
+            (void)write(2, msg, sizeof msg - 1); _exit(126);
+        }
         int null = open("/dev/null", O_RDWR);
-        if(null < 0 || dup2(null, 0) < 0 || dup2(null, 1) < 0) _exit(126);
+        if(null < 0 || dup2(null, 0) < 0 || dup2(null, 1) < 0){
+            static const char msg[] = "AirPlay worker end reason=stdio setup failed\n";
+            (void)write(2, msg, sizeof msg - 1); _exit(126);
+        }
         if(null > 3) close(null);
-        execv("/proc/self/exe", argv); _exit(127);
+        execv("/proc/self/exe", argv);
+        static const char msg[] = "AirPlay worker end reason=exec failed\n";
+        (void)write(2, msg, sizeof msg - 1); _exit(127);
     }
     close(decoder[1]); a->decoder_ctl=decoder[0];
     close(sockets[1]); setpgid(pid, pid); a->pid = pid; a->ctl = sockets[0]; return 0;
 }
 static int send_message(aps_sender *a, aps_message *m){ return aps_ipc_send(a->ctl, a->serial, m, -1); }
-static void terminate(aps_sender *a){
+static void terminate(aps_sender *a, const char *reason){
     if(a->preflight) atomic_store(&((input_check *)a->preflight)->cancel, 1);
     if(a->pid <= 0 || a->terminated) return;
+    if(!a->cancel_reason) fprintf(stderr, "AirPlay terminate reason=%s error=%d\n", reason, a->error);
     aps_message m = { .type = APS_CANCEL }; (void)send_message(a, &m);
     a->terminated = 1; a->terminate_at = a->now + 1500; a->phase = APSS_ENDING; a->pin_wanted = 0;
 }
@@ -99,9 +108,9 @@ static int play(void *ctx){
     aps_sender *a = ctx; aps_message m = { .type = APS_COMMAND, .command = PB_CMD_TOGGLE, .play = 1 };
     return send_message(a, &m);
 }
-static int stop(void *ctx){ terminate(ctx); return 0; }
+static int stop(void *ctx){ terminate(ctx, "handoff stop"); return 0; }
 static void sender_revoke(void *ctx){ (void)ctx; }
-static void release(void *ctx){ terminate(ctx); }
+static void release(void *ctx){ terminate(ctx, "handoff release"); }
 static void publish(void *ctx, const pb_cast_state *v){
     aps_sender *a = ctx;
     if(v) a->view = *v;
@@ -135,7 +144,7 @@ static int input_same(const aps_sender *a, const ho_local *l){
 static void start_handoff(aps_sender *a, const ho_local *l){
     ho_sink k = sink(a); ho_event e = { HO_EV_SELECT, 0, l, a->target.name, 0 };
     a->phase = APSS_RUNNING; ho_step(a->handoff, a->now, &e, &k);
-    if(ho_get(a->handoff) != HO_PREPARING){ terminate(a); return; }
+    if(ho_get(a->handoff) != HO_PREPARING){ terminate(a, "handoff rejected"); return; }
     event(a, HO_EV_REMOTE_READY, l);
 }
 static void input_tick(aps_sender *a, const ho_local *l){
@@ -146,12 +155,12 @@ static void input_tick(aps_sender *a, const ho_local *l){
         !strcmp(c->path, l->path) && c->mode == a->mode && c->pos_id == a->pos_id;
     free(c);
     if(a->phase != APSS_PREPARING || a->terminated || a->pid <= 0) return;
-    if(!same){ if(input_start(a, l)){ a->error = APS_ERR_FORMAT; terminate(a); } return; }
-    if(result == APS_CHECK_DECODER){ a->error = APS_ERR_DECODER; terminate(a); return; }
-    if(result != 0){ a->error = APS_ERR_FORMAT; terminate(a); return; }
+    if(!same){ if(input_start(a, l)){ a->error = APS_ERR_FORMAT; terminate(a, "stale input restart failed"); } return; }
+    if(result == APS_CHECK_DECODER){ a->error = APS_ERR_DECODER; terminate(a, "input decoder unavailable"); return; }
+    if(result != 0){ a->error = APS_ERR_FORMAT; terminate(a, "input check failed"); return; }
     if(!a->stream_ready){
         aps_message m = { .type = APS_FORMAT, .rate = (int)rate, .bits = (int)bits };
-        if(send_message(a, &m)){ terminate(a); return; }
+        if(send_message(a, &m)){ terminate(a, "FORMAT send failed"); return; }
         a->format_pending = 1; return;
     }
     start_handoff(a, l);
@@ -164,7 +173,7 @@ int aps_sender_begin(aps_sender *a, const rd_receiver *target, const ho_local *l
     if(aps_sender_active(a) || ho_get(a->handoff) != HO_LOCAL || !l || !l->sd_ok || !l->have_track ||
        l->source_mode || !target || target->protocol == RD_CAST || a->serial == UINT32_MAX) return -1;
     memset(&a->view, 0, sizeof a->view); a->stop_confirmed = 0; a->stream_ready = a->format_pending = 0; a->have_volume = 0; a->volume = 0;
-    a->target = *target; a->now = now; ++a->serial; a->error = a->terminated = a->faulted = 0;
+    a->target = *target; a->now = now; ++a->serial; a->error = a->terminated = a->faulted = 0; a->cancel_reason = NULL;
     a->player_generation = l->generation; a->source = l->source_mode;
     if(!sd_io_owner_begin()) return -1;
     a->owner = 1;
@@ -172,14 +181,19 @@ int aps_sender_begin(aps_sender *a, const rd_receiver *target, const ho_local *l
     a->phase = APSS_PREPARING; a->deadline = now + 180000; a->pin_wanted = 0;
     aps_message m = { .type = APS_TARGET, .target = *target, .command = (uint32_t)!!a->forget_next };
     a->forget_next = 0;
-    if(send_message(a, &m)){ terminate(a); return -1; }
+    if(send_message(a, &m)){ terminate(a, "TARGET send failed"); return -1; }
     return 0;
 }
-void aps_sender_cancel(aps_sender *a, uint32_t now){
+void aps_sender_cancel_reason(aps_sender *a, uint32_t now, const char *reason){
+    if(a->pid > 0 && !a->terminated){
+        fprintf(stderr, "AirPlay cancel reason=%s\n", reason);
+        a->cancel_reason = reason;
+    }
     a->now = now;
     if(a->phase == APSS_RUNNING) event(a, HO_EV_STOP, NULL);
-    terminate(a);
+    terminate(a, reason);
 }
+void aps_sender_cancel(aps_sender *a, uint32_t now){ aps_sender_cancel_reason(a, now, "explicit cancel"); }
 int aps_sender_pin(aps_sender *a, const char *pin){
     size_t n = pin ? strlen(pin) : 0;
     if(!a->pin_wanted || a->phase != APSS_PREPARING || n < 4 || n > 8) return -1;
@@ -203,18 +217,18 @@ int aps_sender_command(aps_sender *a, pb_cmd command, long arg){
 }
 static void receive(aps_sender *a, const ho_local *l){
     for(unsigned i = 0; i < 32; i++){
-        aps_message m; int fd; int n = aps_ipc_receive(a->ctl, a->serial, &m, &fd);
+        aps_message m; int fd; const char *reason; int n = aps_ipc_receive_reason(a->ctl, a->serial, &m, &fd, &reason);
         if(!n) break;
-        if(n < 0){ terminate(a); break; }
-        if(fd >= 0){ close(fd); terminate(a); break; }
+        if(n < 0){ terminate(a, reason); break; }
+        if(fd >= 0){ close(fd); terminate(a, "unexpected descriptor"); break; }
         if(m.type == APS_NEED_PIN && a->phase == APSS_PREPARING) a->pin_wanted = 1;
         else if(m.type == APS_READY && a->phase == APSS_PREPARING){
             a->pin_wanted = 0;
-            if(input_start(a, l)){ a->error = APS_ERR_FORMAT; terminate(a); }
+            if(input_start(a, l)){ a->error = APS_ERR_FORMAT; terminate(a, "input check failed"); }
         } else if(m.type == APS_STREAM_READY && a->phase == APSS_PREPARING && a->format_pending){
             a->format_pending = 0; a->stream_ready = 1;
             if(input_same(a, l)) start_handoff(a, l);
-            else if(input_start(a, l)){ a->error = APS_ERR_FORMAT; terminate(a); }
+            else if(input_start(a, l)){ a->error = APS_ERR_FORMAT; terminate(a, "input check failed"); }
         } else if(m.type == APS_STARTED && a->phase == APSS_RUNNING){
             event(a, HO_EV_LOAD_OK, l); event(a, HO_EV_MEDIA, l);
         } else if(m.type == APS_VIEW && a->phase == APSS_RUNNING && ho_get(a->handoff) == HO_CASTING){
@@ -224,19 +238,19 @@ static void receive(aps_sender *a, const ho_local *l){
                (uint64_t)queue_view.occ[0]+1 == m.occurrence){ m.view.queue_pos = queue_view.pos+1; m.view.queue_len = queue_view.n_queue; }
             a->rate = m.rate; a->bits = m.bits; a->volume = m.volume; a->have_volume = m.have_volume; a->local_id = m.local_id; a->local_ord = m.local_ord; a->view.active = 1; a->view.v = m.view; (void)playback_set_remote(PB_SRC_AIRPLAY, &a->view);
         } else if(m.type == APS_NEED_NEXT && a->queue && a->phase == APSS_RUNNING){
-            if(aps_queue_request(a->queue, &m)) terminate(a);
+            if(aps_queue_request(a->queue, &m)) terminate(a, "NEED_NEXT post failed");
         } else if(m.type == APS_NOTICE){
             if(m.command == APS_QUEUE_CHANGED){ a->queue_changed++; continue; }
             if(m.command == APS_QUEUE_REFUSED){ a->unsupported_choice++; continue; }
             if(m.command == APS_QUEUE_SKIP){ if(m.position_ms > 0 && m.position_ms <= CQ_MAX_OCCURRENCES) a->skipped += (unsigned)m.position_ms; continue; }
-            if(m.command == APS_REMOTE_STOP){ aps_sender_cancel(a, a->now); continue; }
+            if(m.command == APS_REMOTE_STOP){ aps_sender_cancel_reason(a, a->now, "receiver stop"); continue; }
             if(a->cfg.notice && m.command <= PB_CMD_VOLUME) a->cfg.notice((pb_cmd)m.command);
         } else if(m.type == APS_STOPPED){
             a->stop_confirmed = 1;
         } else if(m.type == APS_FAILED){
             if(a->error != APS_ERR_DECODER) a->error = m.error;
-            terminate(a);
-        } else if(m.type != APS_ENDED){ terminate(a); break; }
+            terminate(a, "APS_FAILED");
+        } else if(m.type != APS_ENDED){ terminate(a, "unexpected message"); break; }
     }
 }
 /* Creation is synchronous in the supervisor, before any response. A worker
@@ -253,13 +267,13 @@ static void decoder_tick(aps_sender *a){
                 close(fd); fd=-1;
                 if(a->decoder_pid<0){
                     if(a->decoder_pid==STOCK_SPAWN_UNPREPARED && !a->error) a->error=APS_ERR_DECODER;
-                    a->decoder_pid=0; terminate(a);
+                    a->decoder_pid=0; terminate(a, "decoder spawn failed");
                 }
-                else if(asb_send(a->decoder_ctl,a->serial,ASB_READY,stream)) terminate(a);
+                else if(asb_send(a->decoder_ctl,a->serial,ASB_READY,stream)) terminate(a, "decoder READY send failed");
                 if(stream>=0) close(stream);
             } else if(op==ASB_CLOSE && a->decoder_pid>0) a->decoder_closing=1;
-            else terminate(a);
-        } else if(n<0) terminate(a);
+            else terminate(a, "decoder unexpected operation");
+        } else if(n<0) terminate(a, "decoder IPC failed");
         if(fd>=0) close(fd);
     }
     if(a->decoder_pid>0 && (a->decoder_closing || a->terminated>=2 || a->worker_reaped)){
@@ -268,9 +282,10 @@ static void decoder_tick(aps_sender *a){
         if(p==a->decoder_pid){
             a->decoder_pid=0;
             if(a->decoder_closing && a->decoder_ctl>=0 &&
-               asb_send(a->decoder_ctl,a->serial,ASB_REAPED,-1)) terminate(a);
+               asb_send(a->decoder_ctl,a->serial,ASB_REAPED,-1)) terminate(a, "decoder REAPED send failed");
             a->decoder_closing=0;
         } else if(p<0 && errno!=EINTR){
+            fprintf(stderr, "AirPlay decoder ownership unknown errno=%d\n", errno);
             a->decoder_unknown=1; a->faulted=1; sd_io_fault(); /* Unknown ownership never drains or signals again. */
         }
     }
@@ -280,14 +295,17 @@ void aps_sender_tick(aps_sender *a, const ho_local *l, uint32_t now){
     a->now = now;
     if(a->phase == APSS_PREPARING && (due(now, a->deadline) || (l &&
        (!l->sd_ok || l->generation != a->player_generation || l->source_mode != a->source)))){
-        a->error = due(now, a->deadline) ? APS_ERR_TIMEOUT : APS_ERR_STREAM; terminate(a);
+        a->error = due(now, a->deadline) ? APS_ERR_TIMEOUT : APS_ERR_STREAM; terminate(a, due(now, a->deadline) ? "prepare timeout" : !l->sd_ok ? "prepare SD unavailable" : l->generation != a->player_generation ? "prepare player generation changed" : "prepare source changed");
     }
     if(a->ctl >= 0) receive(a, l);
     decoder_tick(a);
     input_tick(a, l);
-    if(a->phase == APSS_RUNNING){ event(a, HO_EV_LOCAL, l); if(ho_get(a->handoff) == HO_LOCAL) terminate(a); }
+    if(a->phase == APSS_RUNNING){ event(a, HO_EV_LOCAL, l); if(ho_get(a->handoff) == HO_LOCAL) terminate(a, "handoff returned local"); }
     int status; pid_t p = a->pid > 0 && !a->worker_reaped ? waitpid(a->pid, &status, WNOHANG) : 0;
-    if(p == a->pid && p > 0){ a->worker_reaped=1; }
+    if(p == a->pid && p > 0){
+        fprintf(stderr, "AirPlay worker exit attempt=%u pid=%ld status=0x%x exit=%d signal=%d phase=%d terminate=%d error=%d stopped=%d\n", a->serial, (long)p, (unsigned)status, WIFEXITED(status) ? WEXITSTATUS(status) : -1, WIFSIGNALED(status) ? WTERMSIG(status) : 0, a->phase, a->terminated, a->error, a->stop_confirmed);
+        a->worker_reaped=1;
+    }
     if(a->worker_reaped){
         /* Exit can race the first receive pass. Collect the child's final
          * authenticated private stop acknowledgement before closing ctl. */
@@ -303,10 +321,10 @@ void aps_sender_tick(aps_sender *a, const ho_local *l, uint32_t now){
             return; /* input_tick joins it before ownership can be cleared */
         }
         a->worker_reaped=0;
+        aps_queue_stop(a->queue); a->queue = NULL;
         if(a->ctl >= 0) close(a->ctl);
         a->ctl = -1; a->pid = 0;
         if(a->preflight) atomic_store(&((input_check *)a->preflight)->cancel, 1);
-        aps_queue_stop(a->queue); a->queue = NULL;
         if(a->lease){ a->lease = 0; sd_io_end(); }
         if(a->owner){ sd_io_owner_end(); a->owner = 0; }
         if(ho_get(a->handoff) != HO_LOCAL) event(a, ho_get(a->handoff) == HO_STOPPING && a->stop_confirmed ? HO_EV_REMOTE_STOPPED : HO_EV_REMOTE_LOST, l);
@@ -314,10 +332,13 @@ void aps_sender_tick(aps_sender *a, const ho_local *l, uint32_t now){
         else if(!a->terminated && !a->error) a->error = APS_ERR_STREAM;
         (void)playback_set_remote(PB_SRC_AIRPLAY, NULL); a->phase = APSS_IDLE; a->pin_wanted = 0;
     } else if(a->pid > 0 && a->terminated == 1 && due(now, a->terminate_at)){
+        fprintf(stderr, "AirPlay escalation signal=SIGTERM\n");
         kill(-a->pid, SIGTERM); kill(a->pid, SIGTERM); a->terminated = 2; a->kill_at = now + 1500;
     } else if(a->pid > 0 && a->terminated == 2 && due(now, a->kill_at)){
+        fprintf(stderr, "AirPlay escalation signal=SIGKILL\n");
         kill(-a->pid, SIGKILL); kill(a->pid, SIGKILL); a->terminated = 3; a->fault_at = now + 2000;
     } else if(a->pid > 0 && a->terminated == 3 && !a->faulted && due(now, a->fault_at)){
+        fprintf(stderr, "AirPlay worker ownership unknown after SIGKILL\n");
         a->faulted = 1; sd_io_fault(); /* unknown child state: never report drained */
     }
 }

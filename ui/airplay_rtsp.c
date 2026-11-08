@@ -40,12 +40,12 @@ void aps_rtsp_init(aps_rtsp *r, int fd, int (*cancel)(void *), void *ctx){
 }
 static int wait_fd(aps_rtsp *r, int fd, short events, int64_t end){
     while(!r->dead){
-        if(r->cancel && r->cancel(r->ctx)) return -1;
-        int64_t left = end - aps_now_ms(); if(left <= 0) return -1;
+        if(r->cancel && r->cancel(r->ctx)){ r->diag_cause = "cancelled"; return -1; }
+        int64_t left = end - aps_now_ms(); if(left <= 0){ r->diag_cause = "timeout"; return -1; }
         struct pollfd p = { fd, events, 0 };
         int n = poll(&p, 1, left > 20 ? 20 : (int)left);
         if(n < 0 && errno == EINTR) continue;
-        if(n < 0 || (p.revents & (POLLERR | POLLNVAL))) return -1;
+        if(n < 0 || (p.revents & (POLLERR | POLLNVAL))){ r->diag_cause = "poll failed"; return -1; }
         if(n && (p.revents & (events | POLLHUP))) return 0;
     }
     return -1;
@@ -83,7 +83,7 @@ static int raw_read(aps_rtsp *r, uint8_t *out, size_t n, int64_t end){
             if(wait_fd(r, r->fd, POLLIN, end)) return -1;
             ssize_t k = recv(r->fd, r->raw, sizeof r->raw, 0);
             if(k < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
-            if(k <= 0) return -1;
+            if(k <= 0){ r->diag_cause = k == 0 ? "peer closed" : "receive failed"; r->diag_errno = k < 0 ? errno : 0; return -1; }
             r->raw_at = 0; r->raw_n = (size_t)k;
         }
         size_t k = r->raw_n - r->raw_at; if(k > n) k = n;
@@ -101,7 +101,7 @@ static int plain_read(aps_rtsp *r, void *out, size_t n, int64_t end){
             size_t k = b[0] | (size_t)b[1] << 8;
             if(!k || k > 1024 || raw_read(r, b + 2, k + 16, end)) return -1;
             int result = aps_record_open(r->read_key, &r->rx_counter, b, k + 18, r->plain);
-            if(result < 0) return -1;
+            if(result < 0){ r->diag_cause = "record authentication failed"; return -1; }
             r->plain_at = 0; r->plain_n = (size_t)result;
         }
         size_t k = r->plain_n - r->plain_at; if(k > n) k = n;
@@ -115,7 +115,7 @@ static int raw_write(aps_rtsp *r, const void *data, size_t n, int64_t end){
         if(wait_fd(r, r->fd, POLLOUT, end)) return -1;
         ssize_t k = send(r->fd, p, n, MSG_NOSIGNAL);
         if(k < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
-        if(k <= 0) return -1;
+        if(k <= 0){ r->diag_cause = "send failed"; r->diag_errno = k < 0 ? errno : 0; return -1; }
         p += k; n -= (size_t)k;
     }
     return 0;
@@ -202,15 +202,19 @@ int aps_rtsp_diag(aps_rtsp *r, const char *step, int result, const aps_reply *re
     snprintf(r->diag_step, sizeof r->diag_step, "%.39s", step);
     r->diag_rc = result;
     if(reply){ r->diag_io = result; r->diag_status = reply->status; r->diag_n = reply->n; }
-    fprintf(stderr, "AirPlay step=%.39s io=%d status=%d bytes=%zu rc=%d\n",
-        r->diag_step, r->diag_io, r->diag_status, r->diag_n, result);
+    fprintf(stderr, "AirPlay step=%.39s io=%d status=%d bytes=%zu rc=%d cause=%s errno=%d\n",
+        r->diag_step, r->diag_io, r->diag_status, r->diag_n, result,
+        reply && r->diag_cause ? r->diag_cause : "unverified",
+        reply ? r->diag_errno : 0);
     return result;
 }
 int aps_rtsp_request(aps_rtsp *r, const char *method, const char *uri, const char *extra,
                      const void *body, size_t n, aps_reply *reply, unsigned ms){
     const char *hint = r->diag_next; r->diag_next = NULL;
+    r->diag_cause = r->dead ? "already dead" : "unverified"; r->diag_errno = 0;
     reply->status = 0; reply->n = 0;
     int result = request(r, method, uri, extra, body, n, reply, ms);
+    if(!result) r->diag_cause = "ok";
     if(r->secure){
         char step[40];
         snprintf(step, sizeof step, "%.16s%.22s", method, uri[0] == '/' ? uri : "");

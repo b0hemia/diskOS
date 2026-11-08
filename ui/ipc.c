@@ -888,7 +888,7 @@ static void parse_frame(const char*buf,int n){
     if(buf[0]=='a'&&buf[1]=='8'&&buf[2]=='1'&&buf[3]=='0'){ conv_on_reply(buf,n); return; }
     /* Every aa1f of 8 bytes or more lands here (shorter frames end at the n<8 guard above, like every report). */
     if(!memcmp(buf,"aa1f",4)){ charge_on_frame(buf,n); return; }
-    if(buf[0]==97 && buf[1]==49){ /* "a1<type2><len4><payload>" position, e.g. a1030010 + 8-hex ms */
+    if(!memcmp(buf,"a103",4)){ /* Only a103 reports position; other a1 types include mode echoes. */
         if(n<8) return;
         char lh[5]={buf[4],buf[5],buf[6],buf[7],0};
         if(!all_hex(lh,4)) return;               /* no valid length field -> reject */
@@ -967,7 +967,7 @@ static void parse_frame(const char*buf,int n){
         }
         pthread_mutex_unlock(&g_recov_mu);
     }
-    /* NB: for playback the player emits a1/a2/a714 to /ui (a2=state/love/work_mode/track, a1=position,
+    /* NB: for playback the player emits a103/a2/a714 to /ui (a2=state/love/work_mode/track, a103=position,
      * a714=volume) - no a622/a639/a704 completion replies. SEPARATELY, a 0657 mode CHANGE makes it announce
      * a607 (external/input mode) to /ui, parsed above (a bare 0607 query is not answered on /ui). */
 }
@@ -1173,7 +1173,9 @@ int ipc_player_mode(void){
  * to re-arm after a restart (send the init once per generation). */
 void ipc_screen_snapshot(int *on, unsigned *scr_seq, unsigned *poweroff_seq, unsigned *generation){
     pthread_mutex_lock(&g_recov_mu);
-    if(on) *on=g_scr_on; if(scr_seq) *scr_seq=g_scr_seq; if(poweroff_seq) *poweroff_seq=g_aa03_seq;
+    if(on) *on=g_scr_on;
+    if(scr_seq) *scr_seq=g_scr_seq;
+    if(poweroff_seq) *poweroff_seq=g_aa03_seq;
     if(generation) *generation=g_generation;
     pthread_mutex_unlock(&g_recov_mu);
 }
@@ -1403,7 +1405,7 @@ void ipc_bt_autonext_poll(uint32_t now, int eligible, int preference){
     /* Main thread only. Route departures also restore synchronously above. */
     if(polled && eligible == previous_eligible && (uint32_t)(now - last) < 1000) return;
     polled = 1; last = now; previous_eligible = eligible;
-    int enabled = bt_autonext_mode() && eligible && (preference == 0 || preference == 1);
+    int enabled = eligible && (preference == 0 || preference == 1) && bt_autonext_mode();
     if(!enabled && !pending) return; /* only this main-thread poll can activate */
     pthread_mutex_lock(&g_recov_mu);
     pthread_mutex_lock(&g_tx_mu);
@@ -1650,9 +1652,13 @@ ipc_conv_start_status ipc_conv_start(const char *src, unsigned *op){
     g_conv.op = g_conv_ops;
     unsigned id = g_conv.op;
     pthread_mutex_unlock(&g_conv_mu);
-    if(ipc_send_internal(frame, SEND_PROBE, ipc_generation()) != 0){
+    pthread_mutex_lock(&g_recov_mu);
+    int sent = gen == g_generation && g_rx_ready && !g_rx_reopen ?
+        ipc_send_internal(frame, SEND_PROBE, gen) : -1;
+    pthread_mutex_unlock(&g_recov_mu);
+    if(sent != 0){
         pthread_mutex_lock(&g_conv_mu);
-        if(g_conv.op == id && g_conv.state == IPC_CONV_PENDING) g_conv.state = IPC_CONV_IDLE;
+        if(g_conv.op == id) g_conv.state = IPC_CONV_IDLE;
         pthread_mutex_unlock(&g_conv_mu);
         return IPC_CONV_START_SEND;
     }

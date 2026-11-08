@@ -29,3 +29,30 @@ int playstate_playing(playstate_t *ps, int have_track, long position_ms,
     }
     return (position_ms > 0 && (unsigned)(now_tick - ps->change_tick) < grace_ms);
 }
+
+void playstate_seek_sent(playstate_seek_t *s, unsigned now, unsigned pos_seq,
+                         int was_playing){
+    *s = (playstate_seek_t){ .active = !!was_playing,
+                            .sent_tick = now, .pos_seq = pos_seq };
+}
+
+int playstate_seek_playing(playstate_t *ps, playstate_seek_t *s,
+                           int have_track, long position_ms, unsigned pos_seq,
+                           unsigned now, unsigned grace_ms, unsigned max_adv_ms){
+    if(!have_track || (unsigned)(now - s->sent_tick) >= 4000 ||
+       (s->landed && (unsigned)(now - s->landing_tick) >= 2500))
+        s->active = 0;
+    if(s->active && pos_seq != s->pos_seq){
+        s->pos_seq = pos_seq;
+        if(!s->landed){
+            s->landed = 1;
+            s->landing_tick = now;
+            ps->last_pos_ms = position_ms;
+        } else {
+            s->active = 0;
+        }
+    }
+    int playing = playstate_playing(ps, have_track, position_ms, now,
+                                    grace_ms, max_adv_ms);
+    return s->active ? 1 : playing;
+}

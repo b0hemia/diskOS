@@ -28,11 +28,12 @@ Built with **LVGL 9.2.2** (software renderer) on a static-musl mipsel toolchain.
 | Area | Files |
 |---|---|
 | Core / loop / nav | `main.c`, `screenmgr.c` / `screens.h`, `fb_pan.c`, `ipc.c` / `ipc.h`, `config.c` |
-| Now Playing + art | `ui.c` / `ui.h`, `art.c` / `art.h`, `artcache.c`, `saver.c`, `songinfo.c`, `npmenus.c` |
-| Library / browse | `home.c`, `library.c`, `musicdb.c`, `search.c`, `playlistview.c`, `scanner.c` |
+| Now Playing + art | `ui.c` / `ui.h`, `art.c` / `art.h`, `artcache.c`, `artstore.c` (shared cover cache), `artquota.h`, `artmigrate.h`, `saver.c`, `songinfo.c`, `npmenus.c` |
+| Library / browse | `home.c`, `library.c`, `rowpool.c` (reused list rows), `musicdb.c`, `search.c`, `playlistview.c`, `scanner.c` |
+| Text shaping | `fontft.c`, `indic.c`, `indic_faces.c`, `indic_layout.c`, `indic_rtl.c`, `indic_viewport.c` (Gurmukhi, Devanagari, Urdu, Hebrew) |
 | Settings / features | `settings.c`, `eqcustom.c`, `quicksettings.c`, `modes.c`, `kbinput.c`, `colorpick.c`, `toast.c`, `apps.c`, `debug_ui.c`, `fwcaps.c` |
 | Connectivity | `wifi.c`, `bt.c`, `weather.c`, `lyrics.c`, `lastfm.c` / `lastfm_ui.c` |
-| Bundled third-party | `third_party/freetype-2.13.3/` (FTL), `sqlite3.c` (public domain), `jsmn.h` (MIT), `md5.c` (public domain), `font_*.c` (generated glyph data) |
+| Bundled third-party | `third_party/freetype-2.13.3/` (FTL), `third_party/harfbuzz-14.6.0/` (Old MIT), `third_party/SheenBidi-3.0.0/` (Apache-2.0), `sqlite3.c` (public domain), `jsmn.h` (MIT), `md5.c` (public domain), `font_*.c` (generated glyph data) |
 | Dev/diagnostic tools | `fbshot.c`, and other small on-device helpers (not part of the shipped UI) |
 
 ## Build
@@ -42,6 +43,8 @@ Requires:
   and the pinned config in [`toolchain/mcm-config.mak`](toolchain/mcm-config.mak), or just use the Docker builder
   below. Generic prebuilt mipsel toolchains (e.g. musl.cc) target the older MIPS-I / FP32 ABI: the result runs, but
   the Disc's kernel then emulates every floating-point instruction in software, which is much slower.
+- A matching mipsel-linux-musl **C++** cross compiler for HarfBuzz (text shaping), given as `HB_CROSS`: the same
+  recipe with [`toolchain/mcm-cxx.mak`](toolchain/mcm-cxx.mak) appended. The Docker builder includes it.
 - **LVGL 9.2.2** - **vendored in `./lvgl`** (MIT). It is *lightly customized* (a merged Source Han
   Sans + Font Awesome CJK font, plus font/TJPG tweaks), so use the vendored copy to retain these
   customizations.
@@ -62,6 +65,7 @@ From the public `ui/` directory, with its bundled `third_party/`, `tools/` and `
 
 ```sh
 make CROSS=/opt/x-tools/mipsel-linux-musl/bin/mipsel-linux-musl- \
+  HB_CROSS=/opt/mipsel-n2008-cxx-musl-cross/bin/mipsel-linux-musl- \
   STOCK_AV_HEADERS=/path/to/ffmpeg-4.2.2.tar.xz \
   STOCK_SYSROOT=/path/to/stock-v257 DEP_OUT="$PWD/.build-deps" mq_ui
 ```
@@ -101,7 +105,7 @@ docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/src" \
 The static `mq_ui` lands in the current directory. Supply the two external inputs above
 and ensure the container also has the stock helper compiler and strip tool. The `-u` flag keeps the build outputs owned by you, not root.
 
-The first `docker build` compiles GCC, so it takes a while; later UI builds reuse the image.
+The first `docker build` compiles GCC twice (C, then C++ for HarfBuzz), so it takes a while; later UI builds reuse the image.
 
 ## Troubleshooting
 
@@ -129,6 +133,8 @@ The installer keeps the stock `mq_player` audio engine; only the UI is replaced.
   [`third_party/freetype-2.13.3/docs/FTL.TXT`](third_party/freetype-2.13.3/docs/FTL.TXT).
   This UI is based in part on the work of the FreeType Team. FreeType renders the stock
   `/usr/project/config/fonts/SourceHanSans-Regular.ttc` for CJK fallback.
+- **HarfBuzz 14.6.0** (text shaping): Old MIT - [`licenses/HarfBuzz-COPYING`](licenses/HarfBuzz-COPYING).
+- **SheenBidi 3.0.0** (right-to-left layout): Apache-2.0 - [`licenses/SheenBidi-Apache-2.0.txt`](licenses/SheenBidi-Apache-2.0.txt).
 - **SQLite amalgamation** (`sqlite3.c/.h`): public domain.
 - **jsmn** (`jsmn.h`): MIT (Serge Zaitsev).
 - **md5, RFC 1321** (`md5.c`): public domain (Alexander Peslyak).
@@ -149,6 +155,11 @@ The installer keeps the stock `mq_player` audio engine; only the UI is replaced.
   - **Nunito** (Bold / ExtraBold) - stone theme text and clock (`font_stone_*.c`) - [`licenses/OFL-1.1-Nunito.txt`](licenses/OFL-1.1-Nunito.txt)
   - **Courier Prime** (Regular / Bold) - zine theme text and clock (`font_zine_*.c`) - [`licenses/OFL-1.1-CourierPrime.txt`](licenses/OFL-1.1-CourierPrime.txt)
   - **Rubik Glitch** (Regular) - zine theme titles (`font_zine_*.c`) - [`licenses/OFL-1.1-RubikGlitch.txt`](licenses/OFL-1.1-RubikGlitch.txt)
+- **Embedded whole font files** (`indic_fonts.inc`, made by `tools/embed_indic.py` from `../tools/hbcanary/fonts/`, unmodified), OFL-1.1:
+  - **Noto Sans Gurmukhi UI** (SemiBold) - [`licenses/OFL-Gurmukhi.txt`](licenses/OFL-Gurmukhi.txt)
+  - **Noto Sans Devanagari** (SemiBold) - [`licenses/OFL-Devanagari.txt`](licenses/OFL-Devanagari.txt)
+  - **Noto Naskh Arabic** (SemiBold) - [`licenses/OFL-NotoNaskhArabic.txt`](licenses/OFL-NotoNaskhArabic.txt)
+  - **Noto Sans Hebrew** (SemiBold) - [`licenses/OFL-NotoSansHebrew.txt`](licenses/OFL-NotoSansHebrew.txt)
 
 The "something" theme is an independent design; it is not affiliated with or endorsed by Nothing Technology Limited.
 

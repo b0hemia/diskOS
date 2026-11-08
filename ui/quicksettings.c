@@ -171,7 +171,7 @@ static void tile_short_cb(lv_event_t *e){
     if(tile_local_blocked(id)) return;
     switch(id){
         case QT_WIFI:      { int on = wifi_toggle(); tile_recolor(QT_WIFI, on); ui_toast(on ? "Turning on Wi-Fi..." : "Wi-Fi off"); } break;
-        case QT_BT:        { int on = bt_toggle();   tile_recolor(QT_BT,   on); ui_toast(on ? "Turning on Bluetooth..." : "Bluetooth off"); } break;
+        case QT_BT:        { int on = bt_toggle(); if(on < 0) break; tile_recolor(QT_BT, on); ui_toast(on ? "Turning on Bluetooth..." : "Bluetooth off"); } break;
         case QT_EQ:        eq_toggle(); break;
         case QT_SEARCH:    screen_show(SCR_SEARCH); break;
         case QT_RESCAN:    ui_rescan_library(); break;

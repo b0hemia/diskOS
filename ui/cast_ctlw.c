@@ -155,7 +155,7 @@ static int droppable(int t){ return t == CC_EV_SNAPSHOT || t == CC_EV_NEXT || t 
 static int post(cw *w, const cw_ev *in){
     cw_ev xv = *in; const cw_ev *x = &xv; int t = x->e.type, r = 0, nd = 0;
     pthread_mutex_lock(&w->mu);
-    if(w->closing || t <= CC_EV_NONE || t > CC_EV_JUMP){ pthread_mutex_unlock(&w->mu); return -1; }
+    if(w->closing || t <= CC_EV_NONE || t > CC_EV_PLAY){ pthread_mutex_unlock(&w->mu); return -1; }
     if(t == CC_EV_JUMP && (w->busy || w->en || w->force_local)){
         w->dropped++; pthread_mutex_unlock(&w->mu); return -1;
     }

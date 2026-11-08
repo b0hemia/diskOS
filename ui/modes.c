@@ -395,7 +395,9 @@ void modes_create(lv_obj_t *root){
         lv_obj_t *nm = lv_label_create(row);
         lv_label_set_text(nm, tr(MODES[i].name));
         lv_obj_set_pos(nm, 16, subtitle ? 7 : 16);
-        lv_obj_set_width(nm, 218);
+        /* Both text lines end before the shared 40 px selection column. */
+        const int text_width = 260 - 16 - 40;
+        lv_obj_set_width(nm, text_width);
         lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_font(nm, TF(UI_16), 0);
         lv_obj_set_style_text_color(nm, TC(TEXT_PRIMARY), 0);
@@ -404,9 +406,10 @@ void modes_create(lv_obj_t *root){
         lv_label_set_text(sb, tr(MODES[i].sub));
         if(!subtitle) lv_obj_add_flag(sb, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(sb, 16, 25);
-        lv_obj_set_height(sb, 30);                      /* two lines keep the full receiver hint in the row */
-        lv_obj_set_width(sb, 228);
-        lv_label_set_long_mode(sb, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_line_space(sb, 0, 0);
+        lv_obj_set_height(sb, 2 * lv_font_get_line_height(TF(UI_12)));   /* two lines keep the full receiver hint in the row */
+        lv_obj_set_width(sb, text_width);
+        lv_label_set_long_mode(sb, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_font(sb, TF(UI_12), 0);
         lv_obj_set_style_text_color(sb, TC(TEXT_MUTED), 0);
 

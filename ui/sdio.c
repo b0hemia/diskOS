@@ -22,9 +22,11 @@ static int g_fault;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static unsigned g_users;
 static uint64_t g_generation;
+static uint64_t g_media_generation;
 static unsigned long g_mount_id;
 static int g_allowed;
 static int (*g_media_local)(void);
+static void check_media_locked(void);
 
 void sd_io_init(int (*media_local)(void)){
     pthread_mutex_lock(&g_mu);
@@ -67,7 +69,13 @@ int sd_io_resume(void){
     pthread_mutex_lock(&g_mu);
     int ok = !g_fault && !g_owner && !g_orphan && g_users == 0 && g_media_local && g_media_local();
     if(ok){
-        if(!g_allowed) g_generation++;
+        if(!g_allowed){
+            g_generation++;
+            /* Establish mount identity before admitting leases or cached proofs.
+             * A later first check must compare against this admitted mount, not 0.
+             * Repeated resume while admitted must never absorb a replacement. */
+            check_media_locked();
+        }
         g_allowed = 1;
     }
     pthread_mutex_unlock(&g_mu);
@@ -123,7 +131,13 @@ uint64_t sd_io_generation(void){
 void sd_io_invalidate(void){
     pthread_mutex_lock(&g_mu); g_generation++; pthread_mutex_unlock(&g_mu);
 }
-void sd_io_check_media(void){
+uint64_t sd_io_media_generation(void){
+    pthread_mutex_lock(&g_mu);
+    uint64_t n = g_media_generation;
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+static void check_media_locked(void){
 #ifndef SD_IO_MOUNTINFO
 #define SD_IO_MOUNTINFO "/proc/self/mountinfo"
 #endif
@@ -137,7 +151,13 @@ void sd_io_check_media(void){
                !strcmp(path, "/tmp/sdcard")){ id = candidate; break; }
         fclose(f);
     }
+    if(id != g_mount_id || !f){
+        g_mount_id = id; g_generation++; g_media_generation++;
+    }
+}
+void sd_io_check_media(void){
+    /* Serialize observation and publication with admission and other probes. */
     pthread_mutex_lock(&g_mu);
-    if(id != g_mount_id || !f){ g_mount_id = id; g_generation++; }
+    check_media_locked();
     pthread_mutex_unlock(&g_mu);
 }

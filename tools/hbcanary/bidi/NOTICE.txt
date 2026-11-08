@@ -1,0 +1,6 @@
+Unicode 17.0.0 bidirectional conformance data.
+Copyright (c) 2025 Unicode, Inc.
+The two data files are retained verbatim. Their headers state the terms:
+https://www.unicode.org/terms_of_use.html
+Upstream data: https://www.unicode.org/Public/17.0.0/ucd/
+BidiTest.txt and BidiCharacterTest.txt are test fixtures, not device assets.

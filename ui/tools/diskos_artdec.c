@@ -40,6 +40,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include "../art_identity.h"
+#include "mbedtls/sha256.h"
 
 enum { ST_OK = 0, ST_USAGE = 2, ST_NOPIC = 3, ST_UNSUPPORTED = 4, ST_MALFORMED = 5, ST_LIMIT = 6, ST_IO = 7 };
 
@@ -656,6 +658,9 @@ static int write_bgra(const char *path, const uint16_t *img, int N, int *created
 
 /* ------------------------------------------------------------------ decode one candidate */
 typedef struct { unsigned char *rgb; int w, h, orient; } pic_t;
+static art_identity_wire selected;
+static art_picture_id known;
+static int resolving, checking;
 static int decode(const cand_t *c, pic_t *out){
     if(c->len == 0) return ST_LIMIT;                          /* recorded as over MAX_PIC_BYTES */
     const unsigned char *bytes = c->mem;
@@ -667,6 +672,13 @@ static int decode(const cand_t *c, pic_t *out){
         bytes = owned;
     }
     int rc;
+    if(resolving || checking){
+        selected.picture.length = c->len;
+        if(mbedtls_sha256(bytes, c->len, selected.picture.sha256, 0)){ rc = ST_LIMIT; goto done; }
+        int equal = art_picture_equal(&selected.picture, &known);
+        if(checking && !equal){ rc = ST_NOPIC; goto done; }
+        if(!checking && equal){ rc = ART_ID_REUSED; goto done; }
+    }
     int w, h, comp;
     if(!img_sig(bytes, c->len)){ rc = ST_UNSUPPORTED; goto done; }
     int64_t hw, hh;                                           /* 64-bit: negating INT32_MIN cannot overflow */
@@ -733,11 +745,44 @@ static int limits(void){
     return bad ? -1 : 0;
 }
 
+static int write_identity(const char *dir){
+    char path[4096];
+    if(snprintf(path, sizeof path, "%s/identity", dir) >= (int)sizeof path) return ST_USAGE;
+    selected.magic = ART_ID_MAGIC; selected.version = ART_ID_VERSION;
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if(fd < 0) return ST_IO;
+    int bad = write_all(fd, (const unsigned char *)&selected, sizeof selected);
+    if(close(fd)) bad = 1;
+    if(bad){ unlink(path); return ST_IO; }
+    return ST_OK;
+}
+
+static int read_known(const char *path){
+    int fd = open(path, O_RDONLY | O_CLOEXEC); if(fd < 0) return ST_IO;
+    size_t got = 0;
+    while(got < sizeof known){
+        ssize_t n = read(fd, (unsigned char *)&known + got, sizeof known - got);
+        if(n < 0 && errno == EINTR) continue;
+        if(n <= 0){ close(fd); return ST_IO; }
+        got += (size_t)n;
+    }
+    unsigned char extra; ssize_t n;
+    do n = read(fd, &extra, 1); while(n < 0 && errno == EINTR);
+    int bad = n != 0; if(close(fd)) bad = 1;
+    return bad ? ST_IO : ST_OK;
+}
+
 int main(int argc, char **argv){
-    if(argc != 4) return ST_USAGE;
-    int saver = !strcmp(argv[1], "saver");
-    if(!saver && strcmp(argv[1], "art")) return ST_USAGE;
+    if(argc != 4 && argc != 5) return ST_USAGE;
     if(limits()) return ST_LIMIT;
+    resolving = !strcmp(argv[1], "resolve");
+    if(argc == 5){
+        checking = !strcmp(argv[1], "saver");
+        if(!resolving && !checking) return ST_USAGE;
+        if(read_known(argv[4]) != ST_OK) return ST_IO;
+    }
+    int saver = !strcmp(argv[1], "saver");
+    if(!saver && !resolving && strcmp(argv[1], "art")) return ST_USAGE;
     g_fd = open(argv[2], O_RDONLY | O_CLOEXEC);
     if(g_fd < 0) return ST_IO;
     struct stat st;
@@ -768,21 +813,27 @@ int main(int argc, char **argv){
 
     if(g_ncand == 0) return g_ioerr ? ST_IO : g_limited ? ST_LIMIT : g_malformed ? ST_MALFORMED : ST_NOPIC;
 
+    if(g_ioerr) return ST_IO;
     /* front covers first, then the rest, each in file order; a bad candidate does not hide a later good one */
     int order[MAX_CANDIDATES], no = 0, best = ST_NOPIC;
     for(int pass = 0; pass < 2; pass++)
         for(int i = 0; i < g_ncand; i++) if(g_cand[i].front == !pass) order[no++] = i;
     pic_t pic = {0};
-    int got = 0;
+    int got = 0, reused = 0;
     for(int k = 0; k < no && !got; k++){
         int rc = decode(&g_cand[order[k]], &pic);
-        if(rc == ST_OK) got = 1;
+        if(rc == ST_IO) return ST_IO;
+        if(rc == ST_OK || rc == ART_ID_REUSED){ got = 1; reused = rc == ART_ID_REUSED; selected.candidate = (uint32_t)order[k]; }
         else if(best == ST_NOPIC || rc == ST_LIMIT) best = rc;   /* report the most informative failure */
     }
     if(!got) return g_ioerr ? ST_IO : best;
     free_tags();                                              /* compressed bytes no longer needed */
 
     int rc = ST_OK;
+    if(reused){
+        rc = write_identity(argv[3]);
+        return rc == ST_OK ? ART_ID_REUSED : rc;
+    }
     if(saver){
         uint16_t *img = NULL;
         rc = make(&pic, 360, 0, 0, &img);
@@ -805,6 +856,7 @@ int main(int argc, char **argv){
     if(rc == ST_OK) rc = write_bmp(pc, c, 148, &mc);
     if(rc == ST_OK) rc = write_bmp(pt, t, 42, &mt);
     if(rc == ST_OK) rc = write_bmp(pb, b, 360, &mb);
+    if(rc == ST_OK && resolving) rc = write_identity(argv[3]);
     if(rc != ST_OK){ if(mc) unlink(pc); if(mt) unlink(pt); if(mb) unlink(pb); }
     bfree(c); bfree(t); bfree(b);
     return rc;

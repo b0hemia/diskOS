@@ -3,6 +3,8 @@
 #include "sdio.h"
 #include "musicdb.h"
 #include "sqlite3.h"
+#include "library.h"
+#include <stdint.h>
 #define JSMN_HEADER      /* declarations only; the implementation lives in ipc.c */
 #include "jsmn.h"
 #include <stdio.h>
@@ -47,11 +49,13 @@ static int g_load_err = 0;   /* mdb_load hit a DB error (BUSY/IOERR/OOM) vs a ge
  * (so opening Artists/Albums is as instant as Songs).  mdb_load() invalidates. */
 static char (*g_cart)[MDB_STR];                      static int  g_cart_n = -1;   /* artists */
 static char (*g_calb)[MDB_STR], (*g_calb_ar)[MDB_STR]; static int *g_calb_ct; static int g_calb_n = -1; /* albums */
+static char *g_calb_bucket;
 static int *g_calb_rep;   /* per album: SONG.ID of its first song in library order (cover prewarm representative) */
 static char (*g_cgen)[MDB_STR];                      static int *g_cgen_ct;  static int g_cgen_n = -1;   /* genres */
 static int g_artist_mode;      /* 0 = Artists by ARTIST (collaborations split), 1 = by album artist (else artist) */
 static void groups_free(void){
     free(g_cart);    g_cart=NULL;    g_cart_n=-1;
+    free(g_calb_bucket); g_calb_bucket=NULL;
     free(g_calb);    free(g_calb_ar); free(g_calb_ct); free(g_calb_rep);
     g_calb=NULL; g_calb_ar=NULL; g_calb_ct=NULL; g_calb_rep=NULL; g_calb_n=-1;
     free(g_cgen);    free(g_cgen_ct); g_cgen=NULL; g_cgen_ct=NULL; g_cgen_n=-1;
@@ -225,8 +229,8 @@ int mdb_song_accent_fresh(const char *path, const char *cover_key){
         if(sqlite3_step(st) == SQLITE_ROW){
             rgb = sqlite3_column_int(st, 0);
             const unsigned char *k = sqlite3_column_text(st, 1);
-            if(rgb && !k) legacy = 1;
-            else if(rgb && !strcmp((const char *)k, cover_key)) fresh = 1;
+            if(rgb && !k && strncmp(cover_key,"p1-",3)) legacy = 1;
+            else if(rgb && k && !strcmp((const char *)k, cover_key)) fresh = 1;
         }
         sqlite3_finalize(st);
     }
@@ -273,6 +277,114 @@ static int table_has_col(sqlite3 *d, const char *table, const char *col){
     return has;
 }
 static int playlist_has_m3u_cols(sqlite3 *d){ return table_has_col(d, "CUSTOM_PLAYLIST", "IS_M3U") && table_has_col(d, "CUSTOM_PLAYLIST", "M3U_PATH"); }
+
+/* Sparse group metadata: identities stay independent from their sort strings.
+ * kind: artist, album artist, global album, owner/album, scoped SONG source. */
+typedef struct { int kind, owner_null; unsigned h; char *name, *owner, *value; } mdb_sort_key;
+static mdb_sort_key *g_sort_keys;
+static int g_sort_n, g_sort_ready;
+static int mdb_code4(const char *s);
+static int mdb_code_name_cmp(int ca, const char *a, int cb, const char *b);
+static void mdb_sort_free(mdb_sort_key *keys, int n){
+    for(int i=0;i<n;i++){ free(keys[i].name); free(keys[i].owner); free(keys[i].value); }
+    free(keys);
+}
+static int mdb_sort_identity(const void *a, const void *b){
+    const mdb_sort_key *x=a,*y=b;
+    if(x->kind!=y->kind) return x->kind<y->kind ? -1 : 1;
+    int c=x->kind==0 ? strcasecmp(x->name,y->name) : strcmp(x->name,y->name);
+    if(!c && x->kind==2) c=(x->h>y->h)-(x->h<y->h);
+    if(!c && x->kind==3){
+        c=(x->owner_null>y->owner_null)-(x->owner_null<y->owner_null);
+        if(!c) c=strcmp(x->owner,y->owner);
+    }
+    return c;
+}
+static const char *mdb_sort_min(const char *a, const char *b){
+    if(!a) return b;
+    if(!b) return a;
+    return mdb_code_name_cmp(mdb_code4(a),a,mdb_code4(b),b)<=0 ? a : b;
+}
+static const char *mdb_sort_find(int kind, const char *name, unsigned h, const char *owner, int owner_null){
+    mdb_sort_key key={kind,owner_null,h,(char *)name,(char *)owner,NULL};
+    const mdb_sort_key *hit=g_sort_n ? bsearch(&key,g_sort_keys,(size_t)g_sort_n,sizeof *g_sort_keys,mdb_sort_identity) : NULL;
+    return hit ? hit->value : NULL;
+}
+static int mdb_sort_add(mdb_sort_key **keys, int *n, int *cap, int kind, const char *name,
+                        unsigned h, const char *owner, int owner_null, const char *value){
+    if(!value || !*value || !*name) return 1;
+    if(*n==*cap){
+        if(*cap>INT_MAX/2) return 0;
+        int nc=*cap ? *cap*2 : 16;
+        if((size_t)nc>SIZE_MAX/sizeof **keys) return 0;
+        mdb_sort_key *p=realloc(*keys,(size_t)nc*sizeof *p); if(!p) return 0;
+        *keys=p; *cap=nc;
+    }
+    mdb_sort_key k={kind,owner_null,h,strdup(name),strdup(owner ? owner : ""),strdup(value)};
+    if(!k.name || !k.owner || !k.value){ free(k.name);free(k.owner);free(k.value);return 0; }
+    (*keys)[(*n)++]=k; return 1;
+}
+static int mdb_sort_read(sqlite3 *d, mdb_sort_key **keys, int *n, int *ready){
+    *keys=NULL; *n=0;
+    sqlite3_stmt *st=NULL; int cap=0, rc;
+    *ready=libsort_reader(d,&st);
+    if(*ready!=1) return *ready==0;
+    while((rc=sqlite3_step(st))==SQLITE_ROW){
+        char value[3][LIBSORT_LEN], group[MDB_STR], album[MDB_STR], tokens[2][MDB_STR];
+        for(int i=0;i<3;i++) libsort_text(value[i],(const unsigned char *)colt(st,i+1),(size_t)sqlite3_column_bytes(st,i+1));
+        char song_id[24]; snprintf(song_id,sizeof song_id,"%d",sqlite3_column_int(st,0));
+        const char *raw_album=colt(st,6), *owner=colt(st,7), *aa=colt(st,5);
+        snprintf(group,sizeof group,"%s",*aa ? aa : colt(st,4));
+        snprintf(album,sizeof album,"%s",raw_album); trim(album);
+        int single=mdb_split_artists(colt(st,4),tokens,2)==1;
+        unsigned h=album_hash(raw_album);
+        if((single && !mdb_sort_add(keys,n,&cap,0,tokens[0],0,NULL,0,value[0])) ||
+           !mdb_sort_add(keys,n,&cap,1,group,0,NULL,0,value[*aa ? 1 : 0]) ||
+           !mdb_sort_add(keys,n,&cap,2,album,h,NULL,0,value[2]) ||
+           !mdb_sort_add(keys,n,&cap,3,raw_album,0,owner,sqlite3_column_type(st,7)==SQLITE_NULL,value[2]) ||
+           !mdb_sort_add(keys,n,&cap,4,song_id,0,NULL,0,value[2])){
+            sqlite3_finalize(st); mdb_sort_free(*keys,*n); *keys=NULL; *n=0; return 0;
+        }
+    }
+    sqlite3_finalize(st);
+    if(rc!=SQLITE_DONE){ mdb_sort_free(*keys,*n); *keys=NULL; *n=0; return 0; }
+    if(*n>1) qsort(*keys,(size_t)*n,sizeof **keys,mdb_sort_identity);
+    int w=0;
+    for(int i=0;i<*n;i++){
+        mdb_sort_key *k=*keys+i;
+        if(w && !mdb_sort_identity(*keys+w-1,k)){
+            mdb_sort_key *prev=*keys+w-1;
+            if(mdb_sort_min(prev->value,k->value)==k->value){ free(prev->value); prev->value=k->value; k->value=NULL; }
+            free(k->name);free(k->owner);free(k->value);
+        } else (*keys)[w++]=*k;
+    }
+    *n=w; return 1;
+}
+static int mdb_sort_equal(const mdb_sort_key *a, int an, const mdb_sort_key *b, int bn){
+    if(an!=bn) return 0;
+    for(int i=0;i<an;i++) if(mdb_sort_identity(a+i,b+i) || strcmp(a[i].value,b[i].value)) return 0;
+    return 1;
+}
+static int mdb_sort_order(int ac, const char *a, const char *ak, int bc, const char *b, const char *bk){
+    int c=mdb_code_name_cmp(ak ? mdb_code4(ak) : ac,ak ? ak : a,bk ? mdb_code4(bk) : bc,bk ? bk : b);
+    if(!c){ c=strcasecmp(a,b); if(!c) c=strcmp(a,b); }
+    if(!c) c=(ac>bc)-(ac<bc);
+    return c;
+}
+static char mdb_bucket(const char *s){
+    while(*s==' ') s++;
+    unsigned char c=(unsigned char)*s; if(c>='a' && c<='z') c-=32;
+    return c>='A' && c<='Z' ? (char)c : '#';
+}
+char mdb_browse_bucket(int kind, const char *name){
+    const char *key=NULL;
+    if(kind==1) key=mdb_sort_find(g_artist_mode ? 1 : 0,name,0,NULL,0);
+    else if(kind==2){
+        for(int i=0;i<g_sort_n;i++) if(g_sort_keys[i].kind==2 && !strcmp(g_sort_keys[i].name,name)) key=mdb_sort_min(key,g_sort_keys[i].value);
+    }
+    return mdb_bucket(key ? key : name);
+}
+int mdb_sort_rescan_needed(void){ return !g_sort_ready; }
 
 /* The player's Songs order (mq_ui/mq_player V2.57 song-list SQL): plain files by title code (name code when untitled), sheet
  * and image tracks after them, then ID for ties. GROUP_CODE_EXPR = the Artists-view key's code under "Album Artist". */
@@ -394,20 +506,30 @@ int mdb_load(void){
     sqlite3 *d = db();
     if(d) sqlite3_busy_timeout(d, 0); /* reload retries must never wait on a competing writer */
     sqlite3_int64 v = mdb_data_version();
+    mdb_sort_key *old_keys=g_sort_keys; int old_kn=g_sort_n, old_ready=g_sort_ready;
+    mdb_sort_key *new_keys=NULL; int new_kn=0, new_ready=0;
+    int snapshot=d && sqlite3_exec(d,"SAVEPOINT catalogue_sort;",0,0,0)==SQLITE_OK;
     mdb_song_t *old = g_songs;
     char **old_paths = g_catalog_paths;
     int n = g_n, cap = g_cap;
     g_songs = NULL; g_cap = 0;
     g_catalog_paths = NULL;
-    mdb_read(0);
-    g_catalog_changed = !g_load_err && (n != g_n ||
+    if(snapshot){
+        mdb_read(0);
+        if(!g_load_err && !mdb_sort_read(d,&new_keys,&new_kn,&new_ready)) g_load_err=1;
+        if(sqlite3_exec(d,"RELEASE catalogue_sort;",0,0,0)!=SQLITE_OK) g_load_err=1;
+        if(g_load_err) sqlite3_exec(d,"ROLLBACK TO catalogue_sort; RELEASE catalogue_sort;",0,0,0);
+    } else { g_n=0; g_load_err=1; }
+    g_catalog_changed = !g_load_err && (n != g_n || old_ready!=new_ready || !mdb_sort_equal(old_keys,old_kn,new_keys,new_kn) ||
         (n && (memcmp(old, g_songs, (size_t)n * sizeof *old) ||
                catalog_paths_differ(old_paths, g_catalog_paths, n))));
     if(!g_catalog_changed){
+        mdb_sort_free(new_keys,new_kn);
         catalog_paths_free(g_catalog_paths, g_n);
         g_catalog_paths = old_paths;
         free(g_songs); g_songs = old; g_n = n; g_cap = cap;
     } else {
+        mdb_sort_free(old_keys,old_kn); g_sort_keys=new_keys; g_sort_n=new_kn; g_sort_ready=new_ready;
         groups_free();
         catalog_paths_free(old_paths, n);
         free(old);
@@ -421,12 +543,21 @@ static int mdb_check_external(void){
     sqlite3_int64 v = mdb_data_version();
     if(!g_load_err && v >= 0 && v == g_catalog_version) return 0;
     if(v < 0){ g_load_err = 1; return 0; }
-    /* Stream the same visible fields into one stack row: no catalogue allocation
-     * or cache invalidation for ACCENT-only writes. Stop at the first difference. */
-    if(!g_load_err && !mdb_read(1)){
-        if(!g_load_err) g_catalog_version = v;
-        return 0;
+    if(g_load_err){ mdb_load(); return g_catalog_changed; }
+    sqlite3 *d=db();
+    if(sqlite3_exec(d,"SAVEPOINT sort_probe;",0,0,0)!=SQLITE_OK){ g_load_err=1; return 0; }
+    int same=!g_load_err && !mdb_read(1);
+    mdb_sort_key *keys=NULL; int n=0, ready=0;
+    if(same && !g_load_err){
+        if(!mdb_sort_read(d,&keys,&n,&ready)) g_load_err=1;
+        else same=ready==g_sort_ready && mdb_sort_equal(keys,n,g_sort_keys,g_sort_n);
     }
+    mdb_sort_free(keys,n);
+    if(sqlite3_exec(d,"RELEASE sort_probe;",0,0,0)!=SQLITE_OK){
+        sqlite3_exec(d,"ROLLBACK TO sort_probe; RELEASE sort_probe;",0,0,0); g_load_err=1;
+    }
+    if(g_load_err) return 0;
+    if(same){ g_catalog_version=v; return 0; }
     mdb_load();
     return g_catalog_changed;
 }
@@ -657,42 +788,71 @@ int mdb_play_pos(int id, int list_type, const char *name){
 #define MDB_KEY_WHERE "((COALESCE(ALBUM_ARTIST,ARTIST)=?1) OR (?1 IS NULL AND COALESCE(ALBUM_ARTIST,ARTIST) IS NULL)) AND ALBUM=?2"
 /* Every keyed album (non-empty ALBUM), ordered by name then owner; counts + representative (its first song in the
  * player's album order) optional. Returns how many were written (cap-limited), -1 on a DB error. */
+typedef struct { mdb_album_key_t key; int count, rep, code, rank; const char *sort; } mdb_key_row;
+static int mdb_key_row_cmp(const void *a, const void *b){
+    const mdb_key_row *x=a,*y=b;
+    int c=mdb_sort_order(x->code,x->key.album,x->sort,y->code,y->key.album,y->sort);
+    if(!c) c=strcasecmp(x->key.owner,y->key.owner);
+    if(!c) c=strcmp(x->key.owner,y->key.owner);
+    if(!c) c=(x->key.owner_null<y->key.owner_null)-(x->key.owner_null>y->key.owner_null);
+    return c ? c : (x->rank>y->rank)-(x->rank<y->rank);
+}
 int mdb_album_keys(mdb_album_key_t *keys, int *counts, int *rep_ids, int cap){
     sqlite3 *d = db(); if(!d) return -1;
     sqlite3_stmt *st;
     /* ordered by the stored ALBUM_CODE first (the player's Albums order), then name/owner; a database without the
      * code column falls back to name order */
     static const char *SQL_CODE =
-        "SELECT O, ALBUM, N, ID FROM (SELECT COALESCE(ALBUM_ARTIST,ARTIST) O, ALBUM, ID, COUNT(*) OVER w N, ALBUM_CODE C,"
+        "SELECT O, ALBUM, N, ID, C FROM (SELECT COALESCE(ALBUM_ARTIST,ARTIST) O, ALBUM, ID, COUNT(*) OVER w N, ALBUM_CODE C,"
         " ROW_NUMBER() OVER (w ORDER BY " MDB_ALBUM_ORDER ") RN FROM SONG"
         " WHERE ALBUM IS NOT NULL AND ALBUM<>'' AND lower(PATH) NOT LIKE '%.m4b'"
         " WINDOW w AS (PARTITION BY COALESCE(ALBUM_ARTIST,ARTIST), ALBUM)) WHERE RN=1"
         " ORDER BY IFNULL(C,0), ALBUM COLLATE NOCASE, ALBUM, O COLLATE NOCASE, O;";
     static const char *SQL_NAME =
-        "SELECT O, ALBUM, N, ID FROM (SELECT COALESCE(ALBUM_ARTIST,ARTIST) O, ALBUM, ID, COUNT(*) OVER w N,"
+        "SELECT O, ALBUM, N, ID, 0 FROM (SELECT COALESCE(ALBUM_ARTIST,ARTIST) O, ALBUM, ID, COUNT(*) OVER w N,"
         /* no code columns here: disc, track, then ID */
         " ROW_NUMBER() OVER (w ORDER BY CASE WHEN DISC=0 THEN 1 ELSE 0 END,DISC,CASE WHEN TRACK=0 THEN 1 ELSE 0 END,TRACK,ID) RN FROM SONG"
         " WHERE ALBUM IS NOT NULL AND ALBUM<>'' AND lower(PATH) NOT LIKE '%.m4b'"
         " WINDOW w AS (PARTITION BY COALESCE(ALBUM_ARTIST,ARTIST), ALBUM)) WHERE RN=1"
         " ORDER BY ALBUM COLLATE NOCASE, ALBUM, O COLLATE NOCASE, O;";
     if(sqlite3_prepare_v2(d, SQL_CODE, -1, &st, NULL) != SQLITE_OK && sqlite3_prepare_v2(d, SQL_NAME, -1, &st, NULL) != SQLITE_OK) return -1;
-    int n = 0, rc;
-    while((rc = sqlite3_step(st)) == SQLITE_ROW){
-        if(n < cap){
-            const unsigned char *o = sqlite3_column_text(st, 0), *al = sqlite3_column_text(st, 1);
-            if((o && strlen((const char *)o) >= MDB_STR) || strlen((const char *)al) >= MDB_STR){ continue; }  /* can't key it exactly */
-            keys[n].owner_null = (sqlite3_column_type(st, 0) == SQLITE_NULL);
-            snprintf(keys[n].owner, MDB_STR, "%s", o ? (const char *)o : "");
-            snprintf(keys[n].album, MDB_STR, "%s", (const char *)al);
-            if(counts)  counts[n]  = sqlite3_column_int(st, 2);
-            if(rep_ids) rep_ids[n] = sqlite3_column_int(st, 3);
+    int n=0, rc, allocated=0; mdb_key_row *rows=NULL;
+    while((rc=sqlite3_step(st))==SQLITE_ROW){
+        const char *owner=colt(st,0), *album=colt(st,1);
+        if((n<cap || g_sort_n) && (strlen(owner)>=MDB_STR || strlen(album)>=MDB_STR)) continue;
+        mdb_album_key_t k; memset(&k,0,sizeof k);
+        k.owner_null=sqlite3_column_type(st,0)==SQLITE_NULL;
+        snprintf(k.owner,MDB_STR,"%s",owner); snprintf(k.album,MDB_STR,"%s",album);
+        if(g_sort_n){
+            if(n==allocated){
+                if(allocated>INT_MAX/2){ rc=SQLITE_NOMEM; break; }
+                int nc=allocated ? allocated*2 : 16;
+                mdb_key_row *p=realloc(rows,(size_t)nc*sizeof *p);
+                if(!p){ rc=SQLITE_NOMEM; break; }
+                rows=p; allocated=nc;
+            }
+            rows[n]=(mdb_key_row){k,sqlite3_column_int(st,2),sqlite3_column_int(st,3),sqlite3_column_int(st,4),n,
+                mdb_sort_find(3,album,0,owner,k.owner_null)};
+        } else if(n<cap){
+            keys[n]=k;
+            if(counts) counts[n]=sqlite3_column_int(st,2);
+            if(rep_ids) rep_ids[n]=sqlite3_column_int(st,3);
         }
         n++;
     }
     sqlite3_finalize(st);
-    if(rc != SQLITE_DONE) return -1;
-    return n < cap ? n : cap;
+    if(rc!=SQLITE_DONE){ free(rows); return -1; }
+    if(g_sort_n){
+        qsort(rows,(size_t)n,sizeof *rows,mdb_key_row_cmp);
+        for(int i=0;i<n && i<cap;i++){
+            keys[i]=rows[i].key;
+            if(counts) counts[i]=rows[i].count;
+            if(rep_ids) rep_ids[i]=rows[i].rep;
+        }
+    }
+    free(rows); return n<cap ? n : cap;
 }
+
 /* ids of the rows matched by `where`, in the player's album order. ?1 = p1 (SQL NULL when p1null), ?2 = p2 (unbound
  * when NULL). no_books drops .m4b rows - ONLY for the album's own (visible) list: a stock queue is compared exactly as
  * the player builds it, books included, so a book still in SONG makes it differ and forces the exact custom queue.
@@ -911,20 +1071,63 @@ int mdb_subtrack_plan(const char *const *paths, int npaths, mdb_plan_t *plan){
 }
 
 
-int mdb_split_artists(const char *raw, char toks[][MDB_STR], int cap){
-    int n = 0;
-    char buf[MDB_STR]; snprintf(buf, MDB_STR, "%s", raw);
-    /* split on ',' and ';' */
-    char *p = buf, *start = buf;
-    while(n < cap){
-        if(*p==',' || *p==';' || *p==0){
-            char c = *p; *p = 0;
-            char tok[MDB_STR]; snprintf(tok, MDB_STR, "%s", start); trim(tok);
-            if(tok[0]) snprintf(toks[n++], MDB_STR, "%s", tok);
-            if(c==0) break;
-            start = p+1;
+typedef struct { const char *p, *skip; int after; } mdb_artist_iter;
+static int mdb_artist_space(unsigned char c){ return c==' ' || c=='\t' || c=='\r' || c=='\n'; }
+static int mdb_feature_len(const char *p){
+    static const char *const words[]={"feat.","ft.","featuring"};
+    for(unsigned i=0;i<sizeof words/sizeof words[0];i++){
+        size_t n=strlen(words[i]);
+        if(!strncasecmp(p,words[i],n) && mdb_artist_space((unsigned char)p[n])) return (int)n;
+    }
+    return 0;
+}
+/* A credit made only of ASCII spaces and control bytes (a stray DEL between two commas) names nobody. */
+static int mdb_artist_visible(const char *s){
+    for(const unsigned char *p=(const unsigned char *)s;*p;p++) if(*p>' ' && *p!=0x7f) return 1;
+    return 0;
+}
+/* One streaming grammar for sizing, rows and membership. skip is only the
+ * closing parenthesis of an explicitly recognised featured-credit wrapper. */
+static int mdb_artist_next(mdb_artist_iter *it, char out[MDB_STR]){
+    while(it->p && *it->p){
+        const char *start=it->p, *end=start, *next=NULL, *skip=it->skip, *next_skip=skip;
+        int after=it->after;
+        for(;*end;end++){
+            if(*end==',' || *end==';'){ next=end+1; break; }
+            if(end==start || !mdb_artist_space((unsigned char)end[-1])) continue;
+            int wrapper=*end=='(', len=mdb_feature_len(end+wrapper);
+            if(!len) continue;
+            const char *guest=end+wrapper+len;
+            while(mdb_artist_space((unsigned char)*guest)) guest++;
+            if(!*guest || *guest==',' || *guest==';' || *guest==')') continue;
+            const char *close=wrapper ? strchr(guest,')') : NULL;
+            if(wrapper && (!close || (memchr(guest,'(',(size_t)(close-guest))!=NULL))) continue;
+            const char *left=start;
+            while(left<end && mdb_artist_space((unsigned char)*left)) left++;
+            if(left==end) continue;
+            next=guest; if(wrapper) next_skip=close;
+            break;
         }
-        p++;
+        size_t n=0;
+        for(const char *p=start;p<end;p++) if(p!=skip && n<MDB_STR-1) out[n++]=*p;
+        out[n]=0; trim(out);
+        it->p=next; it->skip=next_skip; it->after=1;
+        if(after){
+            const char *p=out;
+            if(!strncasecmp(p,"and",3) && mdb_artist_space((unsigned char)p[3])) p+=3;
+            else if(*p=='&' && mdb_artist_space((unsigned char)p[1])) p++;
+            while(mdb_artist_space((unsigned char)*p)) p++;
+            if(*p && p!=out) memmove(out,p,strlen(p)+1);
+        }
+        if(mdb_artist_visible(out)) return 1;
+    }
+    return 0;
+}
+int mdb_split_artists(const char *raw, char toks[][MDB_STR], int cap){
+    mdb_artist_iter it={raw,NULL,0}; char token[MDB_STR]; int n=0;
+    while((!toks || n<cap) && mdb_artist_next(&it,token)){
+        if(toks) memcpy(toks[n],token,MDB_STR);
+        n++;
     }
     return n;
 }
@@ -973,7 +1176,7 @@ static int mdb_nc_code(const mdb_nc_t *t, int n, const char *name){
     return hit ? hit->code : mdb_code4(name);
 }
 
-typedef struct { const char *al; const char *ar; int idx; int cnt; int first; int code; unsigned h; } mdb_ai_t;   /* an album row: name, its artist, first song index, song count, lowest song index, sort code */
+typedef struct { const char *al; const char *ar; int idx; int cnt; int first; int code; unsigned h; const char *sort; } mdb_ai_t;   /* an album row: name, its artist, first song index, song count, lowest song index, sort code */
 static int mdb_ai_cmp(const void *a, const void *b){
     const mdb_ai_t *x = a, *y = b;                            /* case-insensitive then exact then song index: a total order */
     int c = strcasecmp(x->al, y->al);
@@ -983,7 +1186,8 @@ static int mdb_ai_cmp(const void *a, const void *b){
 }
 static int mdb_ai_code_cmp(const void *a, const void *b){
     const mdb_ai_t *x = a, *y = b;
-    return mdb_code_name_cmp(x->code, x->al, y->code, y->al);
+    int c=mdb_sort_order(x->code,x->al,x->sort,y->code,y->al,y->sort);
+    return !c && (x->sort || y->sort) ? (x->h>y->h)-(x->h<y->h) : c;
 }
 int mdb_albums(char names[][MDB_STR], char artists[][MDB_STR], int *counts, int cap){
     if(g_calb_n < 0){                                        /* build once - the FULL set - then cache */
@@ -1003,14 +1207,16 @@ int mdb_albums(char names[][MDB_STR], char artists[][MDB_STR], int *counts, int 
                 if(tmp[i].code < tmp[n-1].code) tmp[n-1].code = tmp[i].code;   /* one row per merged name: its lowest code */
             } else tmp[n++] = tmp[i];
         }
+        for(int i=0;i<n;i++) tmp[i].sort=mdb_sort_find(2,tmp[i].al,tmp[i].h,NULL,0);
         qsort(tmp, (size_t)n, sizeof *tmp, mdb_ai_code_cmp); /* the player's Albums order: stored ALBUM_CODE, then name */
         g_calb=malloc((size_t)(n>0?n:1)*MDB_STR); g_calb_ar=malloc((size_t)(n>0?n:1)*MDB_STR); g_calb_ct=malloc((size_t)(n>0?n:1)*sizeof(int));
         g_calb_rep=malloc((size_t)(n>0?n:1)*sizeof(int));
-        if(g_calb && g_calb_ar && g_calb_ct && g_calb_rep){
+        g_calb_bucket=malloc((size_t)(n>0?n:1));
+        if(g_calb && g_calb_ar && g_calb_ct && g_calb_rep && g_calb_bucket){
             for(int i=0;i<n;i++){ snprintf(g_calb[i],MDB_STR,"%s",tmp[i].al); snprintf(g_calb_ar[i],MDB_STR,"%s",tmp[i].ar); g_calb_ct[i]=tmp[i].cnt;
-                                  g_calb_rep[i]=g_songs[tmp[i].first].id; }
+                                  g_calb_rep[i]=g_songs[tmp[i].first].id; g_calb_bucket[i]=mdb_bucket(tmp[i].sort ? tmp[i].sort : tmp[i].al); }
             g_calb_n=n;
-        } else { free(g_calb); free(g_calb_ar); free(g_calb_ct); free(g_calb_rep); g_calb=NULL; g_calb_ar=NULL; g_calb_ct=NULL; g_calb_rep=NULL; free(tmp); return 0; }
+        } else { free(g_calb_bucket); g_calb_bucket=NULL; free(g_calb); free(g_calb_ar); free(g_calb_ct); free(g_calb_rep); g_calb=NULL; g_calb_ar=NULL; g_calb_ct=NULL; g_calb_rep=NULL; free(tmp); return 0; }
         free(tmp);
         /* fall through to the capped copy-out */
     }
@@ -1032,6 +1238,11 @@ int mdb_album_rep_ids(int *out, int cap){
     return n;
 }
 
+char mdb_album_bucket(int row){
+    if(g_calb_n<0) mdb_albums(NULL,NULL,NULL,0);
+    return row>=0 && row<g_calb_n ? g_calb_bucket[row] : '#';
+}
+
 int mdb_album_count(void){
     if(g_calb_n < 0) mdb_albums(NULL, NULL, NULL, 0);        /* cap 0 -> builds the full cache, copies nothing */
     return g_calb_n;                                          /* -1 if the build failed (OOM); >=0 = real count */
@@ -1048,17 +1259,18 @@ static int mdb_name_ci_exact_cmp(const void *a, const void *b){
 /* Reorders n names (already de-duplicated) into the player's list order: stored sort code, then name. `group` picks the
  * artist or Artists-view code table; a name with no stored code (a split credit) gets the derived one. On OOM the list
  * stays in case-insensitive order. */
+typedef struct { const char *name, *sort; int code; } mdb_order_name;
 static int mdb_named_code_cmp(const void *a, const void *b){
-    const mdb_nc_t *x = a, *y = b;
-    return mdb_code_name_cmp(x->code, x->name, y->code, y->name);
+    const mdb_order_name *x=a,*y=b;
+    return mdb_sort_order(x->code,x->name,x->sort,y->code,y->name,y->sort);
 }
 static void mdb_order_names_by_code(char (*buf)[MDB_STR], int n, int group){
     if(n < 2) return;
     int tn = 0; mdb_nc_t *tbl = mdb_nc_build(group, &tn);
-    mdb_nc_t *arr = malloc((size_t)n * sizeof *arr);
+    mdb_order_name *arr = malloc((size_t)n * sizeof *arr);
     char (*out)[MDB_STR] = malloc((size_t)n * MDB_STR);
     if(arr && out){
-        for(int i = 0; i < n; i++){ arr[i].name = buf[i]; arr[i].code = mdb_nc_code(tbl, tn, buf[i]); }
+        for(int i = 0; i < n; i++){ arr[i].name = buf[i]; arr[i].code = mdb_nc_code(tbl, tn, buf[i]); arr[i].sort=mdb_sort_find(group ? 1 : 0,buf[i],0,NULL,0); }
         qsort(arr, (size_t)n, sizeof *arr, mdb_named_code_cmp);
         for(int i = 0; i < n; i++) memcpy(out[i], arr[i].name, MDB_STR);
         memcpy(buf, out, (size_t)n * MDB_STR);
@@ -1080,7 +1292,7 @@ int mdb_artist_missing(const char *key){
 }
 static int artist_has(const mdb_song_t *s, const char *key){
     const char *raw = g_artist_mode ? s->artist_group : s->artist;
-    if(!key[0]) return mdb_artist_missing(raw);
+    if(!key[0]) return g_artist_mode ? mdb_artist_missing(raw) : !mdb_split_artists(raw, NULL, 0);   /* no credit = Unknown */
     return g_artist_mode ? !strcmp(raw, key) : artist_credited(raw, key);
 }
 
@@ -1104,23 +1316,23 @@ int mdb_artists(char names[][MDB_STR], int cap){
         if(g_cart_n < 0) return 0;
     }
     if(g_cart_n < 0){                                        /* build once, then cache */
-        /* Build into a temp sized to the EXACT token count (not the caller's cap), so a
-         * collab-heavy library can't truncate before dedup. Count every credit (separators
-         * on ',' / ';', +1) with NO per-song cap, and split each song's artists straight into
-         * the buffer - a song crediting more than a handful of artists keeps all of them. */
-        long maxtok = 0;
+        /* Size and fill with the same iterator, independently of the caller's cap,
+         * so collaborations cannot truncate the shared cache before deduplication. */
+        int maxtok = 0;
         for(int i=0;i<g_n;i++){
-            int c=1; for(const char *p=g_songs[i].artist; *p; p++) if(*p==','||*p==';') c++;
+            int c=mdb_split_artists(g_songs[i].artist,NULL,0);
+            if(!c) c=1;                                      /* no credit: one Unknown artist row */
+            if(c>INT_MAX-maxtok || (size_t)(maxtok+c)>SIZE_MAX/MDB_STR) return 0;
             maxtok += c;
         }
         char (*buf)[MDB_STR] = malloc((size_t)(maxtok>0?maxtok:1) * MDB_STR);
         if(!buf) return 0;                                   /* transient OOM: leave -1, retry later */
         int n = 0;
         for(int i=0;i<g_n && n<maxtok;i++){
-            if(mdb_artist_missing(g_songs[i].artist)) memset(buf[n++], 0, MDB_STR);
-            else n += mdb_split_artists(g_songs[i].artist, buf + n, (int)(maxtok - n));
+            int k = mdb_split_artists(g_songs[i].artist, buf + n, (int)(maxtok - n));
+            if(k) n += k; else memset(buf[n++], 0, MDB_STR);
         }
-        qsort(buf, (size_t)n, MDB_STR, mdb_name_ci_cmp);
+        qsort(buf, (size_t)n, MDB_STR, g_sort_n ? mdb_name_ci_exact_cmp : mdb_name_ci_cmp);
         int w = 0;
         for(int i=0;i<n;i++)
             if(w==0 || strcasecmp(buf[w-1], buf[i]) != 0){
@@ -1282,20 +1494,10 @@ int mdb_album_songs(const char *album, const mdb_song_t **out, int cap){
     return n;
 }
 
-/* True if `artist` is one of the ',' / ';'-separated credits in `raw` (case-insensitive, trimmed).
- * No token-count cap, so a song crediting many artists matches under EACH of them - the artist
- * list and the artist's song list agree. */
+/* Membership uses the same iterator as cache sizing and enumeration. */
 static int artist_credited(const char *raw, const char *artist){
-    size_t alen = strlen(artist);
-    for(const char *s = raw; *s; ){
-        while(*s==' '||*s=='\t') s++;                       /* skip leading space */
-        const char *start = s;
-        while(*s && *s!=',' && *s!=';') s++;                /* token = [start, end) */
-        const char *end = s;
-        while(end>start && (end[-1]==' '||end[-1]=='\t'||end[-1]=='\r'||end[-1]=='\n')) end--;   /* trim trailing, matching trim() */
-        if((size_t)(end-start)==alen && alen && strncasecmp(start, artist, alen)==0) return 1;
-        if(*s) s++;                                         /* step past the separator */
-    }
+    mdb_artist_iter it={raw,NULL,0}; char token[MDB_STR];
+    while(mdb_artist_next(&it,token)) if(!strcasecmp(token,artist)) return 1;
     return 0;
 }
 
@@ -1389,8 +1591,52 @@ static int scope_id_cmp(const void *a, const void *b){
     int x = (*(const mdb_song_t *const *)a)->id, y = (*(const mdb_song_t *const *)b)->id;
     return (x > y) - (x < y);
 }
-int mdb_scope_albums(int kind, const char *key, char names[][MDB_STR], char artists[][MDB_STR], int *counts, int cap){
+static const char *mdb_song_album_sort(int id){
+    char key[24]; snprintf(key,sizeof key,"%d",id);
+    return mdb_sort_find(4,key,0,NULL,0);
+}
+static int mdb_scope_group_cmp(const void *a, const void *b){
+    const mdb_ai_t *x=a,*y=b;
+    if(!x->sort && !y->sort && !x->code && !y->code) return strcmp(x->al,y->al);
+    return mdb_ai_code_cmp(a,b);
+}
+static int mdb_scope_sorted(int kind, const char *key, char names[][MDB_STR], char artists[][MDB_STR], int *counts, int cap, char *buckets){
+    mdb_ai_t *rows=calloc((size_t)(g_n ? g_n : 1),sizeof *rows);
+    if(!rows) return 0;
+    int m=0;
+    for(int i=0;i<g_n;i++) if(g_songs[i].album[0] && scope_has(kind,&g_songs[i],key)){
+        rows[m].al=g_songs[i].album; rows[m].ar=g_songs[i].artist; rows[m].idx=i;
+        rows[m].cnt=1; rows[m].code=g_songs[i].code_album;
+        rows[m].sort=mdb_song_album_sort(g_songs[i].id); m++;
+    }
+    qsort(rows,(size_t)m,sizeof *rows,mdb_ai_cmp);
+    int n=0;
+    for(int i=0;i<m;i++){
+        if(n && !strcmp(rows[n-1].al,rows[i].al)){
+            rows[n-1].cnt++;
+            if(rows[i].code<rows[n-1].code) rows[n-1].code=rows[i].code;
+            rows[n-1].sort=mdb_sort_min(rows[n-1].sort,rows[i].sort);
+        } else rows[n++]=rows[i];
+    }
+    qsort(rows,(size_t)n,sizeof *rows,mdb_scope_group_cmp);
+    for(int i=0;names && i<n && i<cap;i++){
+        snprintf(names[i],MDB_STR,"%s",rows[i].al);
+        if(artists) snprintf(artists[i],MDB_STR,"%s",rows[i].ar);
+        if(counts) counts[i]=rows[i].cnt;
+        if(buckets) buckets[i]=mdb_bucket(rows[i].sort ? rows[i].sort : rows[i].al);
+    }
+    free(rows); return n;
+}
+char mdb_scope_album_bucket(int kind, const char *key, const char *album){
+    const char *sort=NULL;
+    for(int i=0;i<g_n;i++) if(!strcmp(g_songs[i].album,album) && scope_has(kind,&g_songs[i],key))
+        sort=mdb_sort_min(sort,mdb_song_album_sort(g_songs[i].id));
+    return mdb_bucket(sort ? sort : album);
+}
+int mdb_scope_albums_buckets(int kind, const char *key, char names[][MDB_STR], char artists[][MDB_STR], int *counts, int cap, char *buckets){
     if(!key || (!key[0] && kind != MDB_SCOPE_ARTIST)) return 0;
+    for(int i=0;i<g_sort_n;i++) if(g_sort_keys[i].kind==2)
+        return mdb_scope_sorted(kind,key,names,artists,counts,cap,buckets);
     const mdb_song_t **tmp = malloc((size_t)(g_n > 0 ? g_n : 1) * sizeof *tmp);
     if(!tmp) return 0;
     int m = 0;
@@ -1404,11 +1650,15 @@ int mdb_scope_albums(int kind, const char *key, char names[][MDB_STR], char arti
             snprintf(names[n], MDB_STR, "%s", tmp[i]->album);
             if(artists) snprintf(artists[n], MDB_STR, "%s", tmp[i]->artist);
             if(counts)  counts[n] = j - i;
+            if(buckets) buckets[n]=mdb_bucket(tmp[i]->album);
         }
         n++; i = j;
     }
     free(tmp);
     return n;
+}
+int mdb_scope_albums(int kind, const char *key, char names[][MDB_STR], char artists[][MDB_STR], int *counts, int cap){
+    return mdb_scope_albums_buckets(kind,key,names,artists,counts,cap,NULL);
 }
 /* The songs of one album inside a scope, in the player's album order (disc, track, title code; unknown last). Fills up to
  * cap rows of out and returns the number written (out NULL: the full count). *exact = 1 when the order came from the DB; 0 = the DB order could not be
@@ -2432,37 +2682,66 @@ static void pl_sanitize(const char *name, char *out, int cap){
     out[j] = 0;
     if(!out[0]){ out[0]='p'; out[1]=0; }
 }
-/* Export a custom playlist to /tmp/sdcard/<name>-<uid>.m3u (an M3U the stock player + others can read).
- * Uses the SD-write ownership guard so it never races a USB-Storage export. Returns 1 on success.
- * `outname` (<=cap) receives the file name actually written (for the toast).
- *
- * The filename identity is "<name>-<uid>", where uid is a monotone counter value bound to the playlist at
- * creation (DISKOS_PL_EXPORT). Names alone collide two ways a name-based file would not survive - distinct
- * names sanitise to the same base ("Rock/Pop" and "Rock:Pop" -> "Rock_Pop"), and distinct bases alias on a
- * case-insensitive FAT/exFAT card ("Rock" vs "rock"). The pid is not reuse-proof (the allocator recycles
- * it after a delete) and ADD_TIME is not either (two creations can share a whole second). The uid counter
- * only ever increases and is persisted, and a recycled pid is rebound to a fresh uid at create, so two
- * different playlists (any lifetime) never share a uid -> never target the same file. */
-/* Is `path` an existing diskOS export of the playlist called `name`? (starts with #EXTM3U and carries our
- * #PLAYLIST:<name> directive). Only such a file is safe to overwrite on re-export; anything else - a user's
- * own .m3u, or a stale export of a different playlist - must be preserved. */
-static int pl_export_is_ours(const char *path, const char *name){
+/* Persist a random ownership token as well as the filename counter: a rebuilt DB can reuse that counter.
+ * REPLACE on playlist creation clears the token, so even a recycled pid gets a fresh identity. */
+static int pl_export_token(sqlite3 *d, long pid, long long uid, char *token){
+    unsigned char bytes[16];
+    char fresh[33];
+    int fd = open("/dev/urandom", O_RDONLY);
+    if(fd < 0) return 0;
+    size_t done = 0;
+    while(done < sizeof bytes){
+        ssize_t n = read(fd, bytes + done, sizeof bytes - done);
+        if(n < 0 && errno == EINTR) continue;
+        if(n <= 0){ close(fd); return 0; }
+        done += (size_t)n;
+    }
+    if(close(fd) != 0) return 0;
+    for(size_t i = 0; i < sizeof bytes; i++){
+        fresh[2*i] = "0123456789abcdef"[bytes[i] >> 4];
+        fresh[2*i+1] = "0123456789abcdef"[bytes[i] & 15];
+    }
+    fresh[32] = 0;
+    const char *sql = "UPDATE DISKOS_PL_EXPORT SET TOKEN=?3 WHERE PID=?1 AND UID=?2 AND TOKEN IS NULL;";
+    sqlite3_stmt *st;
+    if(sqlite3_prepare_v2(d, sql, -1, &st, NULL) != SQLITE_OK){
+        /* Upgrade the old two-column table on the first export. Other failures refuse the export. */
+        if(sqlite3_exec(d, "ALTER TABLE DISKOS_PL_EXPORT ADD COLUMN TOKEN TEXT;", 0, 0, 0) != SQLITE_OK) return 0;
+        if(sqlite3_prepare_v2(d, sql, -1, &st, NULL) != SQLITE_OK) return 0;
+    }
+    sqlite3_bind_int64(st, 1, pid); sqlite3_bind_int64(st, 2, uid);
+    sqlite3_bind_text(st, 3, fresh, -1, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(st); sqlite3_finalize(st);
+    if(rc != SQLITE_DONE) return 0;
+    if(sqlite3_prepare_v2(d, "SELECT TOKEN FROM DISKOS_PL_EXPORT WHERE PID=? AND UID=?;", -1, &st, NULL) != SQLITE_OK) return 0;
+    sqlite3_bind_int64(st, 1, pid); sqlite3_bind_int64(st, 2, uid);
+    int ok = 0;
+    if(sqlite3_step(st) == SQLITE_ROW){
+        const char *s = colt(st, 0);
+        if(strlen(s) == 32 && strspn(s, "0123456789abcdef") == 32){ memcpy(token, s, 33); ok = 1; }
+    }
+    sqlite3_finalize(st);
+    return ok;
+}
+/* Only the exact diskOS ownership directive proves this is our playlist's previous export. */
+static int pl_export_is_ours(const char *path, const char *marker){
     FILE *f = fopen(path, "r"); if(!f) return 0;   /* unreadable -> treat as not-ours, don't clobber */
     char line[256]; int ok = 0, i = 0;
     while(i < 8 && fgets(line, sizeof line, f)){
-        if(i == 0 && strncmp(line, "#EXTM3U", 7) != 0) break;   /* not an extended-M3U -> not ours */
-        if(strncmp(line, "#PLAYLIST:", 10) == 0){
-            char *v = line + 10; size_t L = strlen(v);
-            while(L && (v[L-1]=='\n' || v[L-1]=='\r')) v[--L] = 0;
-            if(name && strcmp(v, name) == 0) ok = 1;            /* same playlist name -> our prior export */
-            break;
-        }
+        if(i == 0 && strcmp(line, "#EXTM3U\n") != 0) break;
+        if(strcmp(line, marker) == 0){ ok = 1; break; }
         i++;
     }
+    if(ferror(f)) ok = 0;
     fclose(f);
     return ok;
 }
+static int pl_export_available(const char *path, const char *marker){
+    if(access(path, F_OK) != 0 && errno == ENOENT) return 1;
+    return pl_export_is_ours(path, marker);
+}
 
+/* Export via a temporary file + rename under the SD-write guard. outname receives the actual filename. */
 static int mdb_playlist_export_leased(long pid, const char *name, char *outname, int cap){
     if(pid<=0) return 0;
     sqlite3 *d = db(); if(!d) return 0;
@@ -2484,21 +2763,28 @@ static int mdb_playlist_export_leased(long pid, const char *name, char *outname,
         else sqlite3_exec(d, "ROLLBACK;", 0, 0, 0);
     }
     if(!have_uid) return 0;
+    char token[33], marker[96];
+    if(!pl_export_token(d, pid, uid, token)) return 0;
+    snprintf(marker, sizeof marker, "#DISKOS-PLAYLIST:%lld:%s\n", uid, token);
     char base[160];   /* safe(<=95) + "-" + uid (<=19 digits) [+ "_N" disambiguator], no truncation of the unique suffix */
     snprintf(base, sizeof base, "%s-%lld", safe, uid);
     char path[200]; snprintf(path, sizeof path, "/tmp/sdcard/%s.m3u", base);
-    /* Never overwrite a file diskOS didn't write: if the destination exists and isn't our own export of
-     * THIS playlist (a user's .m3u, or a stale export left after a DB rebuild reset the uid counter), pick a
-     * free "<base>_N.m3u" instead of clobbering it. */
-    if(access(path, F_OK) == 0 && !pl_export_is_ours(path, name)){
+    /* Reuse this playlist's own prior export before looking for a free name, even if an earlier
+     * collision disappeared. Never overwrite a user's file or a stale export from a rebuilt DB. */
+    {
         int found = 0;
-        for(int nsfx = 2; nsfx <= 999; nsfx++){
-            char cand[200]; snprintf(cand, sizeof cand, "/tmp/sdcard/%s_%d.m3u", base, nsfx);
-            if(access(cand, F_OK) != 0 || pl_export_is_ours(cand, name)){   /* free, OR our own prior suffixed export -> (re)use it */
-                char nb[176]; snprintf(nb, sizeof nb, "%s_%d", base, nsfx);
-                snprintf(base, sizeof base, "%s", nb);
-                snprintf(path, sizeof path, "%s", cand);
-                found = 1; break;
+        for(int pass = 0; pass < 2 && !found; pass++){
+            for(int nsfx = 1; nsfx <= 999; nsfx++){
+                char nb[160], cand[200];
+                if(nsfx == 1) snprintf(nb, sizeof nb, "%s", base);
+                else snprintf(nb, sizeof nb, "%.116s_%d", base, nsfx);
+                snprintf(cand, sizeof cand, "/tmp/sdcard/%s.m3u", nb);
+                if(pass == 0 ? pl_export_is_ours(cand, marker)
+                             : pl_export_available(cand, marker)){
+                    snprintf(base, sizeof base, "%s", nb);
+                    snprintf(path, sizeof path, "%s", cand);
+                    found = 1; break;
+                }
             }
         }
         if(!found) return 0;   /* every candidate belongs to someone else -> refuse rather than overwrite a user file */
@@ -2514,6 +2800,7 @@ static int mdb_playlist_export_leased(long pid, const char *name, char *outname,
     if(!f){ close(tfd); unlink(tmp); sd_write_end(); return 0; }
     int ok = 1;
     if(fprintf(f, "#EXTM3U\n") < 0) ok = 0;
+    if(fputs(marker, f) == EOF) ok = 0;
     /* Record the real playlist name in a standard extended-M3U directive (a comment, so any other player
      * ignores it). Import reads it back to restore the true name and stay idempotent, so re-importing an
      * exported "<name>-<uid>.m3u" updates/skips the same playlist instead of creating a "<name>-<uid>"
@@ -2662,8 +2949,10 @@ static int peq_key_is(const char *js, const jsmntok_t *t, const char *s){   /* o
  * PARAMS_JSON is an array of EXACTLY 10 flat objects; band i has filterType==0 (number), frequency==the fixed
  * GFREQ[i] (number, position-preserving), qValue=="0.7" (string), gain=an integer string in [-12,12]; and
  * MASTER_GAIN is an integer in [-12,12]. Anything else (parametric params, out-of-range gains the editor
- * would clamp, or a structure it can't round-trip) is NOT graphic -> the caller preserves it. */
-int mdb_peq_is_graphic(int style_preset){
+ * would clamp, or a structure it can't round-trip) is NOT graphic -> the caller preserves it.
+ * The V2.57 snapshot also accepts 0.70/0.71 and requires each position, retaining Q verbatim. */
+static int peq_read_graphic(int style_preset, mdb_peq_snapshot *out){
+    mdb_peq_snapshot row = {0};
     static const int GFREQ[10] = {32,64,125,250,500,1000,2000,4000,8000,16000};
     sqlite3 *d = db(); if(!d) return -1;
     sqlite3_stmt *st;
@@ -2684,7 +2973,9 @@ int mdb_peq_is_graphic(int style_preset){
             if(neg) mv = -mv;
             if(!ok || mv < -12 || mv > 12) graphic = 0;
         }
+        row.master = sqlite3_column_int(st, 0);
         const char *js = (const char*)sqlite3_column_text(st, 1);
+        if(out && !js) graphic = 0;
         int jlen = js ? sqlite3_column_bytes(st, 1) : 0;
         if(graphic && js){
             jsmn_parser jp; jsmntok_t tok[256]; jsmn_init(&jp);
@@ -2700,7 +2991,7 @@ int mdb_peq_is_graphic(int style_preset){
                 for(int band = 0; graphic && band < 10; band++){
                     if(ti >= nt || tok[ti].type != JSMN_OBJECT){ graphic = 0; break; }
                     int nfields = tok[ti].size; ti++;
-                    int have_ft = 0, have_fr = 0, have_q = 0, have_g = 0;
+                    int have_ft = 0, have_fr = 0, have_q = 0, have_g = 0, have_pos = 0;
                     for(int f = 0; graphic && f < nfields; f++){
                         if(ti + 1 >= nt || tok[ti].type != JSMN_STRING){ graphic = 0; break; }
                         const jsmntok_t *k = &tok[ti], *val = &tok[ti + 1];
@@ -2708,20 +2999,31 @@ int mdb_peq_is_graphic(int style_preset){
                         long v;
                         if(peq_key_is(js, k, "filterType")){ if(have_ft || val->type != JSMN_PRIMITIVE || !peq_tok_int(js, val, &v) || v != 0) graphic = 0; else have_ft = 1; }
                         else if(peq_key_is(js, k, "frequency")){ if(have_fr || val->type != JSMN_PRIMITIVE || !peq_tok_int(js, val, &v) || v != GFREQ[band]) graphic = 0; else have_fr = 1; }
-                        else if(peq_key_is(js, k, "qValue")){ if(have_q || val->type != JSMN_STRING || !(val->end - val->start == 3 && strncmp(js + val->start, "0.7", 3) == 0)) graphic = 0; else have_q = 1; }
-                        else if(peq_key_is(js, k, "gain")){ if(have_g || val->type != JSMN_STRING || !peq_tok_int(js, val, &v) || v < -12 || v > 12) graphic = 0; else have_g = 1; }
-                        /* "position" and any other flat field are ignored */
+                        else if(peq_key_is(js, k, "qValue")){
+                            int len = val->end - val->start;
+                            int stock_q = len == 3 && !strncmp(js + val->start, "0.7", 3);
+                            if(out && len == 4 && (!strncmp(js + val->start, "0.70", 4) || !strncmp(js + val->start, "0.71", 4))) stock_q = 1;
+                            if(have_q || val->type != JSMN_STRING || !stock_q) graphic = 0;
+                            else { have_q = 1; memcpy(row.q[band], js + val->start, len); }
+                        }
+                        else if(peq_key_is(js, k, "gain")){ if(have_g || val->type != JSMN_STRING || !peq_tok_int(js, val, &v) || v < -12 || v > 12) graphic = 0; else { have_g = 1; row.gains[band] = (int)v; } }
+                        else if(out && peq_key_is(js, k, "position")){ if(have_pos || val->type != JSMN_PRIMITIVE || !peq_tok_int(js, val, &v) || v != band) graphic = 0; else have_pos = 1; }
+                        /* Older full-row callers retain their existing position policy. */
                         ti += 2;   /* key + flat value */
                     }
-                    if(graphic && !(have_ft && have_fr && have_q && have_g)) graphic = 0;
+                    if(graphic && !(have_ft && have_fr && have_q && have_g && (!out || have_pos))) graphic = 0;
                 }
             }
         }
     }
     sqlite3_finalize(st);
     if(rc != SQLITE_ROW && rc != SQLITE_DONE) return -1;   /* step error -> read failed */
+    if(out && rc == SQLITE_DONE) return 0;
+    if(out && graphic) *out = row;
     return graphic;
 }
+int mdb_peq_is_graphic(int style_preset){ return peq_read_graphic(style_preset, NULL); }
+int mdb_get_peq_snapshot(int slot, mdb_peq_snapshot *out){ return peq_read_graphic(slot, out); }
 
 int mdb_playlist_rename(long pid, const char *name){
     if(!name || strlen(name) >= MDB_STR) return 0;
@@ -2804,6 +3106,53 @@ int mdb_playlist_songs(long pid, mdb_song_t *out, int cap){
     return n;
 }
 
+/* The UI retains only display fields and the occurrence identity, never a
+ * second catalogue-sized song structure. Read into a private snapshot first. */
+int mdb_playlist_display(long pid, mdb_playlist_display_t **out){
+    *out = NULL;
+    sqlite3 *d = db(); if(!d || pid<=0) return -1;
+    int cap = mdb_playlist_count(pid);
+    if(cap < 0) return -1;
+    if(cap > 8192) cap = 8192;
+    if(!cap) return 0;
+    mdb_playlist_display_t *rows = calloc((size_t)cap,sizeof *rows);
+    if(!rows) return -1;
+    sqlite3_stmt *st = NULL;
+    const char *sql = "SELECT IFNULL(TITLE,IFNULL(NAME,'Untitled')),IFNULL(ARTIST,''),IFNULL(DURATION,0),ID "
+                      "FROM CUSTOM_PLAYLIST WHERE PLAYLIST_ID=? ORDER BY ID;";
+    if(sqlite3_prepare_v2(d,sql,-1,&st,NULL)!=SQLITE_OK){ free(rows); return -1; }
+    sqlite3_bind_int64(st,1,pid);
+    int n=0,rc=SQLITE_DONE;
+    while(n<cap && (rc=sqlite3_step(st))==SQLITE_ROW){
+        snprintf(rows[n].title,MDB_STR,"%s",colt(st,0));
+        snprintf(rows[n].artist,MDB_STR,"%s",colt(st,1));
+        trim(rows[n].title); trim(rows[n].artist);
+        rows[n].dur_ms=sqlite3_column_int(st,2);
+        rows[n].occurrence=sqlite3_column_int64(st,3); n++;
+    }
+    sqlite3_finalize(st);
+    if(rc!=SQLITE_DONE && n<cap){ free(rows); return -1; }
+    *out=rows; return n;
+}
+int mdb_playlist_occurrence_pos(long pid, long long occurrence){
+    sqlite3 *d=db(); if(!d) return 0;
+    sqlite3_stmt *st;
+    const char *sql="SELECT COUNT(*) FROM CUSTOM_PLAYLIST WHERE PLAYLIST_ID=?1 AND ID<=?2 "
+                    "AND EXISTS(SELECT 1 FROM CUSTOM_PLAYLIST WHERE PLAYLIST_ID=?1 AND ID=?2);";
+    if(sqlite3_prepare_v2(d,sql,-1,&st,NULL)!=SQLITE_OK) return 0;
+    sqlite3_bind_int64(st,1,pid); sqlite3_bind_int64(st,2,occurrence);
+    int pos=sqlite3_step(st)==SQLITE_ROW ? sqlite3_column_int(st,0) : 0;
+    sqlite3_finalize(st); return pos;
+}
+int mdb_playlist_remove_occurrence(long pid, long long occurrence){
+    sqlite3 *d=db(); if(!d) return 0;
+    sqlite3_stmt *st;
+    if(sqlite3_prepare_v2(d,"DELETE FROM CUSTOM_PLAYLIST WHERE PLAYLIST_ID=? AND ID=?;",-1,&st,NULL)!=SQLITE_OK) return 0;
+    sqlite3_bind_int64(st,1,pid); sqlite3_bind_int64(st,2,occurrence);
+    int rc=sqlite3_step(st); sqlite3_finalize(st);
+    return rc==SQLITE_DONE && sqlite3_changes(d)>0;
+}
+
 /* Cast (14g): the row ids of a playlist in the order mdb_playlist_songs lists them (same WHERE and ORDER BY ID), duplicates kept. */
 int mdb_playlist_rows(long pid, int *ids, int cap){
     if(pid <= 0) return -1;
@@ -2828,17 +3177,6 @@ int mdb_playlist_count(long pid){
     return n;
 }
 
-/* playlist id by exact name, or 0 if none (so re-import is idempotent). */
-static long playlist_id_by_name(const char *name){
-    sqlite3 *d = db(); if(!d) return 0;
-    sqlite3_stmt *st; long id = 0;
-    if(sqlite3_prepare_v2(d, "SELECT ID FROM PLAYLIST_INFO WHERE NAME=? LIMIT 1;", -1, &st, NULL) == SQLITE_OK){
-        sqlite3_bind_text(st, 1, name, -1, SQLITE_STATIC);
-        if(sqlite3_step(st) == SQLITE_ROW) id = (long)sqlite3_column_int64(st,0);
-        sqlite3_finalize(st);
-    }
-    return id;
-}
 /* An existing playlist whose name, with the characters exFAT cannot store in a file name ( " * / : < > ? \ | ) each
  * shown as '_', equals `stem` - so a file named after a playlist ("punjabi music_.m3u" for "punjabi music?") is
  * recognised as that playlist instead of becoming a near-duplicate. Only for names taken from a file name. */
@@ -2894,7 +3232,8 @@ static int resolve_like(sqlite3 *d, const char *like, char *out, int cap, int *h
     int fz = sqlite3_finalize(st);
     if(r2 != SQLITE_DONE || !fits){
         if((r2 != SQLITE_DONE && r2 != SQLITE_ROW) && herr)*herr=1;   /* a step error (not the benign ambiguous ROW) */
-        if(cap>0) out[0]=0; return 0;
+        if(cap>0) out[0]=0;
+        return 0;
     }
     if(fz != SQLITE_OK){ if(herr)*herr=1; if(cap>0) out[0]=0; return 0; }   /* deferred error at finalize */
     return 1;
@@ -2988,7 +3327,7 @@ static int import_m3u_file(const char *m3u_path){
     if(fstat(fileno(fp), &fst) != 0 || fst.st_size > M3U_MAX_BYTES){ fclose(fp); return 0; }   /* too big (or unknown): skip */
     int from_directive = 0;   /* the name came from #PLAYLIST: (exact) rather than the file name (maybe sanitised) */
     const char *b = strrchr(m3u_path, '/'); b = b ? b+1 : m3u_path;
-    char name[512]; snprintf(name, sizeof name, "%s", b);   /* roomy: a long name is shortened with a hash below, never silently cut */
+    char name[600]; snprintf(name, sizeof name, "%s", b);   /* roomy: a long name is shortened with a hash below, never silently cut */
     char *dot = strrchr(name, '.'); if(dot) *dot = 0;
     /* Pre-scan the header for a "#PLAYLIST:" directive. If found, it is the canonical name - use it for both
      * the idempotency check and the created playlist, so re-importing an exported "<name>-<uid>.m3u"
@@ -3045,7 +3384,7 @@ static int import_m3u_file(const char *m3u_path){
     char *sl = strrchr(dir, '/'); if(sl) *sl = 0; else dir[0] = 0;
     /* Import the whole file ATOMICALLY: the playlist row + every member commit together, or nothing
      * does. A mid-import failure (a track fails to insert, or the final COMMIT loses a lock race) then
-     * leaves NO partial playlist behind, so playlist_id_by_name can't block a clean retry on the next
+     * leaves NO partial playlist behind, so the name lookup cannot block a clean retry on the next
      * scan. This replaces a best-effort delete that could itself fail under the same lock and strand the
      * partial forever. mdb_playlist_create's inner SAVEPOINT nests cleanly inside this transaction. */
     sqlite3 *d = db(); if(!d){ fclose(fp); return -1; }
@@ -3057,7 +3396,7 @@ static int import_m3u_file(const char *m3u_path){
      * the write transaction (no other writer can slip a copy in between), and a failed read aborts the import. */
     long clash[M3U_CLASH_MAX]; int nclash = 0;
     char cname[MDB_STR];
-    snprintf(cname, sizeof cname, "%s", name);
+    snprintf(cname, sizeof cname, "%.139s", name);
     { unsigned char used[M3U_CLASH_MAX]; memset(used, 0, sizeof used);
       char nb[MDB_STR]; snprintf(nb, sizeof nb, "%.140s", name); utf8_fix(nb);   /* the base numbered copies are made from */
       size_t bl = strlen(nb), nl = strlen(name);
@@ -3083,7 +3422,7 @@ static int import_m3u_file(const char *m3u_path){
       if(used[1]){
           int k = 2; while(k < M3U_CLASH_MAX && used[k]) k++;
           if(k >= M3U_CLASH_MAX){ sqlite3_exec(d, "ROLLBACK;", 0, 0, 0); fclose(fp); return 0; }   /* 98 copies already */
-          snprintf(cname, sizeof cname, "%s (%d)", nb, k);
+          snprintf(cname, sizeof cname, "%.140s (%d)", nb, k);
       }
     }
     long pid = 0; int added = 0; int db_err = 0; char line[700];
@@ -3651,6 +3990,23 @@ static int sysconfig_flag(const char *sql){
     if(c) sqlite3_close(c);
     return v;
 }
+/* P257@4eee10 selects/repairs, then 4eee64..4eee6c stores EQ_TYPE (key 17).
+ * A new read-only connection avoids retaining an earlier selection snapshot. */
+int mdb_peq_selected(void){
+    sqlite3 *c = NULL; int v = -1;
+    if(sqlite3_open_v2(MDB_SYSCONFIG_PATH, &c, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK){
+        sqlite3_stmt *st;
+        if(sqlite3_prepare_v2(c, "SELECT EQ_TYPE FROM SYSCONFIG WHERE ID=1;", -1, &st, NULL) == SQLITE_OK){
+            if(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_type(st, 0) == SQLITE_INTEGER){
+                int x = sqlite3_column_int(st, 0);
+                if(x >= 0 && x <= 20) v = x;
+            }
+            sqlite3_finalize(st);
+        }
+    }
+    if(c) sqlite3_close(c);
+    return v;
+}
 /* Play Through Folders (0687 -> SYSCONFIG.FOLDER_JUMP, default 0; docs/COMMAND_MAP.md V2.57 preference setters) */
 int mdb_sysconfig_folder_jump(void){ return sysconfig_flag("SELECT FOLDER_JUMP FROM SYSCONFIG WHERE ID=1;"); }
 /* the player's UI language index (stock uses it to pick the iTunes storefront for online covers) */
@@ -3701,4 +4057,117 @@ int mdb_sysconfig_set_auto_time(int on){
     }
     if(c) sqlite3_close(c);
     return (ok == 0 && mdb_sysconfig_auto_time() == on) ? 0 : -1;
+}
+
+/* Keep picture resolution off both the metadata scanner and the drawing thread.
+ * Prefer subsequent album rows, then wrap to earlier entries. This is a bounded
+ * hint, not playback queue ownership. */
+int mdb_art_nearby(const char *track, int pos, int mode, char paths[][512], int cap){
+    if(cap <= 0 || cap > 16) return 0;
+    int n = 0;
+    if(mode == 0 || mode == 1 || mode == 3){
+        mdb_qsnap_t queue;
+        if(mdb_queue_snapshot(mode == 1, pos, track, 4096, &queue) > 0){
+            int ids[4], count = 0, cur = queue.cur;
+            const int *order = mode == 1 ? queue.shuf : queue.base;
+            if(mode == 1) for(int i=0;i<queue.n;i++) if(order[i] == queue.base[queue.cur]){ cur=i; break; }
+            for(int i=cur+1;i<queue.n && count<4 && count<cap;i++) ids[count++]=order[i];
+            if(mode == 3 && count<4) for(int i=0;i<cur && count<4 && count<cap;i++) ids[count++]=order[i];
+            mdb_qrow_t rows[4];
+            if(count && mdb_queue_rows(ids, count, rows, NULL) == count)
+                for(int i=0;i<count;i++) if(strcmp(track, rows[i].path)) snprintf(paths[n++], 512, "%s", rows[i].path);
+            mdb_qsnap_free(&queue);
+        }
+    }
+    sqlite3 *d = db_reader(); if(!d) return n;
+    sqlite3_stmt *q;
+    const char *sql = "SELECT DISTINCT PATH FROM SONG WHERE ALBUM != '' AND ALBUM = "
+        "(SELECT ALBUM FROM SONG WHERE PATH=? LIMIT 1) AND PATH != ? "
+        "ORDER BY PATH < ?, PATH LIMIT ?;";
+    if(sqlite3_prepare_v2(d, sql, -1, &q, NULL) == SQLITE_OK){
+        for(int i=1;i<=3;i++) sqlite3_bind_text(q, i, track, -1, SQLITE_STATIC);
+        sqlite3_bind_int(q, 4, cap - n);
+        while(n < cap && sqlite3_step(q) == SQLITE_ROW){
+            const char *p = (const char *)sqlite3_column_text(q, 0);
+            if(p && strlen(p) < 512) snprintf(paths[n++], 512, "%s", p);
+        }
+        sqlite3_finalize(q);
+    }
+    sqlite3_close(d); return n;
+}
+
+/* Cache migration is worker-only. Hold a read-only library transaction across
+ * retirement so another SQLite writer cannot change the catalogue underneath it.
+ * Enumeration errors, unreadable tracks, scans and generation changes fail closed. */
+#include "artcache.h"
+#include "artstore.h"
+#include "scanner.h"
+#include "ipc.h"
+#include <stdatomic.h>
+static _Atomic uint32_t maintenance_wake;
+static uint32_t maintenance_active_wake;
+
+void artcache_maintenance_wake(void){
+    atomic_fetch_add(&maintenance_wake, 1);
+}
+static struct stat art_library_stamp;
+static uint64_t art_library_epoch,art_media_epoch;
+static int art_library_unchanged(void){
+    struct stat now;
+    return maintenance_active_wake==atomic_load(&maintenance_wake) &&
+        !scanner_active() && !scanner_skipped() && !scanner_no_sd() &&
+        ipc_library_epoch()==art_library_epoch && sd_io_generation()==art_media_epoch &&
+        !stat(DB_PATH,&now) && now.st_dev==art_library_stamp.st_dev && now.st_ino==art_library_stamp.st_ino &&
+        now.st_size==art_library_stamp.st_size && now.st_mtim.tv_sec==art_library_stamp.st_mtim.tv_sec &&
+        now.st_mtim.tv_nsec==art_library_stamp.st_mtim.tv_nsec && now.st_ctim.tv_sec==art_library_stamp.st_ctim.tv_sec &&
+        now.st_ctim.tv_nsec==art_library_stamp.st_ctim.tv_nsec;
+}
+int artcache_maintenance(void){
+    static uint32_t last_wake=UINT32_MAX,finished_wake=UINT32_MAX;
+    static uint64_t finished_library=UINT64_MAX,finished_media=UINT64_MAX;
+    static unsigned finished_art,inventory_art;
+    static uint64_t last_library=UINT64_MAX,last_media=UINT64_MAX;
+    static struct stat last_db;
+    if(scanner_active() || scanner_skipped()>0 || scanner_no_sd() || !sd_io_begin()) return 0;
+    uint32_t wake=atomic_load(&maintenance_wake);
+    maintenance_active_wake=wake;
+    uint64_t library=ipc_library_epoch(),media=sd_io_generation();
+    unsigned art=artcache_gen();
+    if(wake==finished_wake && library==finished_library && media==finished_media){
+        if(art==finished_art){ artstore_idle(); sd_io_end(); return 0; }
+        /* A demand proof can supersede a previously unrecorded warm legacy set. */
+        last_library=UINT64_MAX;
+    }
+    int worked=0;
+    sqlite3 *d=db_reader(); sqlite3_stmt *q=NULL; struct stat before={0},after;
+    int ok=d && !stat(DB_PATH,&before) && sqlite3_exec(d,"BEGIN",NULL,NULL,NULL)==SQLITE_OK;
+    if(ok) ok=sqlite3_prepare_v2(d,"SELECT PATH FROM SONG ORDER BY ID",-1,&q,NULL)==SQLITE_OK;
+    int rebuild=wake!=last_wake || library!=last_library || media!=last_media || before.st_dev!=last_db.st_dev || before.st_ino!=last_db.st_ino || before.st_size!=last_db.st_size ||
+        before.st_ctim.tv_sec!=last_db.st_ctim.tv_sec || before.st_ctim.tv_nsec!=last_db.st_ctim.tv_nsec ||
+        before.st_mtim.tv_sec!=last_db.st_mtim.tv_sec || before.st_mtim.tv_nsec!=last_db.st_mtim.tv_nsec;
+    if(rebuild){ inventory_art=art; artstore_snapshot_begin(library); }
+    int rc=SQLITE_ERROR;
+    if(ok && rebuild){
+        while((rc=sqlite3_step(q))==SQLITE_ROW){
+            const char *track=(const char*)sqlite3_column_text(q,0); char key[24];
+            if(!track || !*track || artcache_key(track,key,sizeof key) || !artstore_snapshot_add(key)){ ok=0; break; }
+        }
+        ok=ok && rc==SQLITE_DONE;
+    }else if(ok){ /* Establish the shared read lock even with the cached key list. */
+        rc=sqlite3_step(q); ok=rc==SQLITE_ROW || rc==SQLITE_DONE;
+    }
+    if(q) sqlite3_finalize(q);
+    ok=ok && wake==atomic_load(&maintenance_wake) &&
+        !scanner_active() && library==ipc_library_epoch() && media==sd_io_generation() &&
+        !stat(DB_PATH,&after) && before.st_dev==after.st_dev && before.st_ino==after.st_ino && before.st_ctim.tv_sec==after.st_ctim.tv_sec && before.st_ctim.tv_nsec==after.st_ctim.tv_nsec && before.st_size==after.st_size && before.st_mtim.tv_sec==after.st_mtim.tv_sec && before.st_mtim.tv_nsec==after.st_mtim.tv_nsec;
+    if(rebuild) artstore_snapshot_finish(ok);
+    if(ok){
+        last_wake=wake;
+        last_library=library; last_media=media; last_db=before;
+        art_library_stamp=before; art_library_epoch=library; art_media_epoch=media;
+        worked=artstore_maintain_checked(library,art_library_unchanged);
+        if(worked==0){ finished_wake=wake; finished_library=library; finished_media=media; finished_art=inventory_art; }
+    }else{ artstore_snapshot_begin(library); artstore_snapshot_finish(0); last_library=UINT64_MAX; }
+    if(d){ sqlite3_exec(d,"ROLLBACK",NULL,NULL,NULL); sqlite3_close(d); }
+    sd_io_end(); return worked>0;
 }

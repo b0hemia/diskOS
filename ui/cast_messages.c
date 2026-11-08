@@ -153,7 +153,8 @@ int cm_parse(const char *s,size_t n,int expected,cm_status *out) {
             cm_media *m=&r.media[r.media_count++];d=0;
             if(!numfield(&j,k,"mediaSessionId",&d,&m->present,CM_MEDIA_ID,INT32_MAX,1)||(m->present&&d==0))return 0;
             m->media_session_id=(int)d;
-            if(!numfield(&j,k,"currentTime",&m->current_time,&m->present,CM_TIME,INT32_MAX,0)||!strfield(&j,k,"playerState",m->player_state,CM_ID)||!strfield(&j,k,"idleReason",m->idle_reason,CM_ID)||!volume(&j,field(&j,k,"volume"),&m->volume))return 0;
+            /* Consumers convert seconds to signed 32-bit milliseconds. */
+            if(!numfield(&j,k,"currentTime",&m->current_time,&m->present,CM_TIME,INT32_MAX / 1000.0,0)||!strfield(&j,k,"playerState",m->player_state,CM_ID)||!strfield(&j,k,"idleReason",m->idle_reason,CM_ID)||!volume(&j,field(&j,k,"volume"),&m->volume))return 0;
             int mi=field(&j,k,"media");if(mi!=-1&&!strfield(&j,mi,"contentId",m->content_id,CM_TEXT))return 0;
         }
     }

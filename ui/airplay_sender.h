@@ -13,6 +13,7 @@ typedef struct {
     void (*notice)(pb_cmd);
 } aps_config;
 typedef struct {
+    const char *cancel_reason; /* Diagnostic only; suppress duplicate cancel requests. */
     ho *handoff; aps_config cfg; aps_queue *queue; void *preflight;
     pid_t pid, decoder_pid; int decoder_ctl, decoder_closing, decoder_unknown, worker_reaped; int ctl, phase, lease, owner, pin_wanted, error, terminated, faulted, stop_confirmed;
     uint32_t serial, now, deadline, terminate_at, kill_at, fault_at;
@@ -27,6 +28,7 @@ int aps_sender_begin(aps_sender *, const rd_receiver *, const ho_local *, uint32
 void aps_sender_tick(aps_sender *, const ho_local *, uint32_t now);
 int aps_sender_active(const aps_sender *);
 void aps_sender_cancel(aps_sender *, uint32_t now);
+void aps_sender_cancel_reason(aps_sender *, uint32_t now, const char *reason);
 int aps_sender_pin(aps_sender *, const char *);
 int aps_sender_volume_query(aps_sender *);
 int aps_sender_command(aps_sender *, pb_cmd, long arg);

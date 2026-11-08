@@ -6,22 +6,14 @@
 #include "config.h"
 #include "musicdb.h"
 #include "fwcaps.h"
+#include "ipc.h"
+#include "i18n.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
-/* Custom graphic EQ: 10 bands (32 Hz..16 kHz) + master, -12..+12 dB, matching the stock
- * player's PEQ. The stock player keeps TEN user slots, USER1..USER10 = STYLE_PRESET 11..20;
- * this editor lets you pick and edit any of them, each remembering its own curve. Values
- * persist to per-slot cfg keys (eqN_b0..9, eqN_master, where N = 1..10) AND apply live to
- * the audio engine: on each change we write the curve into that slot's PEQ row in stock
- * format and select it with 0689 (ui_apply_eq). Format captured live from the stock UI -
- * see RE_CATALOGUE section 3. The 10 bands scroll horizontally (round screen can't show
- * them all at once), like the stock editor.
- *
- * Kept the stock graphic-EQ model on purpose: fixed frequencies, peaking filter, fixed Q.
- * Full parametric editing (filterType/frequency/Q) is out of scope - the filterType enum
- * hasn't been reverse-engineered off the device yet. */
+/* Ten-band graphic EQ. Older players use the existing cfg/write-and-select path.
+ * V2.57 uses stock single-control commands and treats song.db as authoritative. */
 
 int ui_apply_eq(int preset);             /* main.c: 0689 select; <0 = send failed */
 #define NBAND 10
@@ -45,6 +37,36 @@ static int       g_slot_parametric = 0;  /* 1 when the loaded stock slot uses pa
 static int       g_slot_foreign = 0;     /* 1 when a slot we own in cfg has DIVERGED from the live DB curve
                                           * (the stock player changed it under us): select it, never overwrite -
                                           * a plain re-select must not clobber the external change */
+
+/* The existing generation-checked sender refuses edits across player reattach. */
+static mdb_peq_snapshot g_peq, g_expected;
+static lv_timer_t *g_peq_timer;
+static int g_peq_pending, g_peq_slot, g_drag_slot = -1;
+static unsigned g_peq_gen;
+static uint32_t g_peq_started;
+static void peq_poll(lv_timer_t *t);
+static int g_peq_flat;   /* the pending edit is Flat: 0675 zeroes gains and master; the Disc keeps each band's Q */
+
+/* U257@4717bc..4717d4 -> 48b680; 41a4e8 serializes a one-element array,
+ * 48b700..48b724 formats tag + length + count(1) + JSON. P257@4ef774 ->
+ * 45e9e4 consumes it by position and persists at 45ec40..45ec4c. */
+static int peq_send_band(int band, int gain){
+    char json[180], frame[200];
+    int n = snprintf(json, sizeof json,
+        "[{\"filterType\":0,\"frequency\":%d,\"position\":%d,\"gain\":\"%d.0\",\"qValue\":\"%s\"}]",
+        FREQHZ[band], band, gain, g_peq.q[band]);
+    snprintf(frame, sizeof frame, "0678%04X0001%s", n + 12, json);
+    return ipc_send_automatic(frame, g_peq_gen);
+}
+/* U257@471844..47188c passes signed slider tenths to 48b28c, masked to
+ * 16 bits at 48b3c0. P257@4f025c..4f0270 loads signed16 and divides by 10. */
+static int peq_send_master(int gain){
+    char frame[16]; snprintf(frame, sizeof frame, "0630000C%04X", (unsigned)(gain * 10) & 0xffff);
+    return ipc_send_automatic(frame, g_peq_gen);
+}
+/* U257@471500..471510: 0675, value 0, no string -> 48b3bc..48b3e0.
+ * P257@4ef4a8 -> 45ee30..45effc resets and persists the current USER slot. */
+static int peq_send_flat(void){ return ipc_send_automatic("0675000C0000", g_peq_gen); }
 
 /* per-slot cfg keys: slot 11 (USER1) -> "eq1_b0".."eq1_b9" + "eq1_master", etc. So every
  * user slot keeps its own 10-band curve + master preamp independently. */
@@ -131,6 +153,16 @@ static void persist_slot(int slot){
  * have never edited shows the player's EXISTING (stock) PEQ curve, so selecting or first-editing
  * it never silently zeroes a stock USER preset. */
 static int load_slot_read(int slot){
+    if(fw_peq_band_edit()){
+        mdb_peq_snapshot row;
+        int r = mdb_get_peq_snapshot(slot, &row);
+        if(r < 0) return 0;
+        g_curve_known = r == 1;
+        g_slot_parametric = r == 0;
+        g_slot_foreign = 0;
+        if(r == 1){ g_peq = row; show_curve(row.gains, row.master); }
+        return 1;
+    }
     int dg[NBAND]={0}, dm=0;
     int r=mdb_get_peq(slot,&dm,dg);
     if(r<0) return 0;
@@ -164,12 +196,88 @@ static int load_slot(int slot){
     return ok;
 }
 
+static int peq_same_gains(const mdb_peq_snapshot *a, const mdb_peq_snapshot *b){
+    return a->master == b->master && !memcmp(a->gains, b->gains, sizeof a->gains);
+}
+/* Stock persistence can spell 0.7 as 0.70; compare values, retain the fresh spelling. */
+static int peq_same(const mdb_peq_snapshot *a, const mdb_peq_snapshot *b){
+    if(!peq_same_gains(a, b)) return 0;
+    for(int i=0;i<NBAND;i++){
+        int aq = !strcmp(a->q[i], "0.71"), bq = !strcmp(b->q[i], "0.71");
+        if(aq != bq) return 0;
+    }
+    return 1;
+}
+/* One outstanding operation. Each poll ends its transaction so delayed player writes
+ * become visible. Never show the dragged value as a confirmed save. No cfg curve on V257. */
+static void peq_wait(int selecting, int slot){
+    g_curve_known = 0;
+    g_peq_pending = selecting ? 1 : 2;
+    g_peq_slot = slot; g_peq_started = lv_tick_get();
+    if(!g_peq_timer) g_peq_timer = lv_timer_create(peq_poll, 100, NULL);
+    if(!g_peq_timer){ g_peq_pending = 0; ui_toast(tr("Couldn't apply EQ")); }
+}
+static void peq_poll(lv_timer_t *t){
+    mdb_peq_snapshot row;
+    int r = -1, selected = mdb_peq_selected();
+    if(g_peq_gen == ipc_generation() && selected == g_peq_slot && mdb_ui_read_begin()){
+        r = mdb_get_peq_snapshot(g_peq_slot, &row);
+        mdb_ui_read_end();
+    }
+    int done = r == 1 && (g_peq_flat ? peq_same_gains(&row, &g_expected) : peq_same(&row, &g_expected));
+    if(r == 1 && (g_peq_pending == 1 || (done && !peq_same(&row, &g_peq)))){
+        if(g_peq_pending == 1){
+            g_slot = g_peq_slot; cfg_set_int("eq_slot", g_slot);
+            if(g_slotlbl){ char b[16]; snprintf(b, sizeof b, "USER%d", g_slot-10); lv_label_set_text(g_slotlbl, b); }
+        }
+        g_peq = row; show_curve(row.gains, row.master); g_curve_known = 1; g_slot_parametric = 0;
+    } else if(lv_tick_elaps(g_peq_started) < 2000 && g_peq_gen == ipc_generation()) return;
+    else ui_toast(tr("Couldn't apply EQ"));
+    g_peq_pending = 0; g_peq_timer = NULL; lv_timer_del(t);
+}
+static void peq_edit(int band, int flat){
+    int value = flat ? 0 : lv_slider_get_value(band == NBAND ? g_master : g_band[band]);
+    show_curve(g_peq.gains, g_peq.master);
+    if(g_peq_pending) return;
+    /* A drag started on an earlier slot must never be applied to this one. */
+    if((g_drag_slot >= 0 && g_drag_slot != g_slot) || !g_curve_known ||
+       g_peq_gen != ipc_generation() || cfg_get_int("eq_preset", g_slot) != g_slot || mdb_peq_selected() != g_slot){
+        g_curve_known = 0; ui_toast(tr("Couldn't apply EQ")); return;
+    }
+    mdb_peq_snapshot row;
+    int r = -1;
+    if(mdb_ui_read_begin()){
+        r = mdb_get_peq_snapshot(g_slot, &row); mdb_ui_read_end();
+    }
+    if(r != 1 || g_peq_gen != ipc_generation() ||
+       cfg_get_int("eq_preset", g_slot) != g_slot || mdb_peq_selected() != g_slot){ g_curve_known = 0; ui_toast(tr("EQ read failed, try again")); return; }
+    g_peq = row; show_curve(row.gains, row.master); g_expected = row;
+    g_peq_flat = flat;
+    if(flat){
+        g_expected.master = 0;
+        for(int i=0;i<NBAND;i++) g_expected.gains[i] = 0;
+    } else if(band == NBAND) g_expected.master = value;
+    else g_expected.gains[band] = value;
+    /* No change needs no command or acknowledgement (also drops duplicate release events). */
+    if(flat ? peq_same_gains(&row, &g_expected) : peq_same(&row, &g_expected)) return;
+    int rc = flat ? peq_send_flat() : band == NBAND ? peq_send_master(value) : peq_send_band(band, value);
+    g_curve_known = 0;
+    if(rc != 0){ ui_toast(tr("Couldn't apply EQ")); return; }
+    peq_wait(0, g_slot);
+}
+
 /* switch the edited slot: show its curve, then apply it live. A diskOS-owned slot is written
  * back + selected; a slot we have never edited is only SELECTED (0689) - never overwritten with
  * a flat curve, which would destroy a stock USER preset. */
 static void set_slot(int slot){
+    if(fw_peq_band_edit() && (g_peq_pending || g_drag_slot >= 0)) return;
     if(slot < SLOT_MIN) slot = SLOT_MIN;
     if(slot > SLOT_MAX) slot = SLOT_MAX;
+    if(fw_peq_band_edit()){
+        g_curve_known = 0; g_peq_gen = ipc_generation();
+        if(ui_eq_select(slot) < 0){ ui_toast(tr("Couldn't apply EQ")); return; }
+        peq_wait(1, slot); return;
+    }
     if(!load_slot(slot)) return;
     g_slot = slot;
     cfg_set_int("eq_slot", g_slot);
@@ -182,8 +290,27 @@ static void set_slot(int slot){
     }
 }
 
+/* Opening the already-active USER slot must not add another loader repair. */
+static void peq_open(int slot){
+    if(g_peq_pending || g_drag_slot >= 0) return;
+    if(cfg_get_int("eq_preset", -1) != slot || mdb_peq_selected() != slot){ set_slot(slot); return; }
+    if(!load_slot(slot)) return;
+    if(!g_curve_known){ ui_toast(tr("Couldn't apply EQ")); return; }
+    g_slot = slot; g_peq_gen = ipc_generation();
+    cfg_set_int("eq_slot", slot);
+    if(g_slotlbl){ char b[16]; snprintf(b, sizeof b, "USER%d", slot-10); lv_label_set_text(g_slotlbl, b); }
+}
+
+/* A press the input layer reset without a release must not block navigation forever. */
+static void peq_cancel_drag(void){
+    if(g_drag_slot < 0) return;
+    g_drag_slot = -1;
+    show_curve(g_peq.gains, g_peq.master);
+}
+
 static void slot_dir_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+    if(fw_peq_band_edit()) peq_cancel_drag();
     int dir = (int)(intptr_t)lv_event_get_user_data(e);
     set_slot(g_slot + dir);              /* clamps at USER1 / USER10 (no wrap) */
 }
@@ -197,7 +324,12 @@ static void band_cb(lv_event_t *e){
 }
 /* persist this control (to the current slot) + apply the whole curve when the finger lifts */
 static void band_release_cb(lv_event_t *e){
-    (void)e;
+    if(fw_peq_band_edit()){
+        if(g_drag_slot < 0) return;
+        int band = (int)(intptr_t)lv_event_get_user_data(e);
+        if(band >= 0 && band <= NBAND) peq_edit(band, 0);
+        g_drag_slot = -1; return;
+    }
     if(!fw_custom_peq_writable()){ ui_toast("Custom EQ: not on this firmware yet"); load_slot(g_slot); return; }
     /* Blocked edit: either a stock PARAMETRIC preset (which the 10-band graphic editor would flatten), or a
      * slot whose stock curve we FAILED to read (persisting the placeholder-flat would clobber it). Either
@@ -216,6 +348,7 @@ static void band_release_cb(lv_event_t *e){
 
 static void flat_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+    if(fw_peq_band_edit()){ peq_edit(0, 1); return; }
     if(!fw_custom_peq_writable()){ ui_toast("Custom EQ: not on this firmware yet"); return; }
     /* LV_ANIM_OFF so the slider VALUES are actually 0 when apply_now() reads them below - with
      * LV_ANIM_ON the sliders are still mid-animation and apply_now() would send the old/intermediate
@@ -231,6 +364,13 @@ static void flat_cb(lv_event_t *e){
      * slot's curve known again (flat), so a following band edit persists normally. */
     if(apply_now()){ persist_slot(g_slot); g_curve_known = 1; }
     else ui_toast("Couldn't apply EQ");
+}
+
+static void band_press_cb(lv_event_t *e){ (void)e; g_drag_slot = g_slot; }
+static void peq_delete_cb(lv_event_t *e){
+    (void)e;
+    if(g_peq_timer){ lv_timer_del(g_peq_timer); g_peq_timer = NULL; }
+    g_peq_pending = 0; g_curve_known = 0; g_drag_slot = -1; g_slotlbl = NULL;
 }
 
 /* one EQ column: value label on top, vertical slider, freq label below. idx==NBAND = master.
@@ -261,6 +401,7 @@ static void make_col(lv_obj_t *parent, int idx, const char *flabel,
     lv_obj_set_style_bg_color(sl, TC(ACCENT_PRIMARY), LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(sl, TC(CONTROL_KNOB), LV_PART_KNOB);
     ui_on(sl, band_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)idx, "eqcustom.band.value", UI_CORE);
+    lv_obj_add_event_cb(sl, band_press_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(sl, band_release_cb, LV_EVENT_RELEASED, (void*)(intptr_t)idx);
     lv_obj_add_event_cb(sl, band_release_cb, LV_EVENT_PRESS_LOST, (void*)(intptr_t)idx);
 
@@ -328,6 +469,7 @@ void eqcustom_refresh(void){
     int pre  = cfg_get_int("eq_preset", -1);
     if(pre >= SLOT_MIN && pre <= SLOT_MAX) init = pre;
     if(init < SLOT_MIN || init > SLOT_MAX) init = SLOT_MIN;
+    if(fw_peq_band_edit()){ peq_cancel_drag(); peq_open(init); return; }
     if(!load_slot(init)) return;
     g_slot = init;
     cfg_set_int("eq_slot", g_slot);
@@ -338,7 +480,7 @@ void eqcustom_create(lv_obj_t *root){
     lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
-    migrate_legacy_user1();   /* carry a pre-slots Custom EQ curve into USER1 (one-time, non-destructive) */
+    if(!fw_peq_band_edit()) migrate_legacy_user1();   /* carry a pre-slots Custom EQ curve into USER1 (one-time, non-destructive) */
 
     /* Resolve which slot to edit: if a USER slot is the live preset, edit that one; else fall
      * back to the editor's last-edited slot; default USER1. */
@@ -383,7 +525,8 @@ void eqcustom_create(lv_obj_t *root){
     for(int i=0;i<NBAND;i++)
         make_col(scr, i, FREQLBL[i], &g_band[i], &g_bval[i]);
 
-    load_slot(g_slot);   /* populate sliders from the resolved slot (no live apply on open) */
+    load_slot(g_slot);   /* construction is display-only (screens are built at startup); refresh handles entry */
+    lv_obj_add_event_cb(root, peq_delete_cb, LV_EVENT_DELETE, NULL);
 
     lv_obj_t *flat = lv_button_create(root);
     lv_obj_remove_style_all(flat);

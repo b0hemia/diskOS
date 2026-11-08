@@ -7,6 +7,7 @@
 typedef struct {
     int fd, secure, dead;
     char diag_step[40]; const char *diag_next;
+    const char *diag_cause; int diag_errno;
     int diag_io, diag_status, diag_rc; size_t diag_n;
     unsigned seq;
     uint64_t tx_counter, rx_counter;

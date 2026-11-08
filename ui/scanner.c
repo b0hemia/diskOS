@@ -12,7 +12,7 @@
  * by PATH and left intact, so a rescan doesn't lose them.
  *
  * Tag support: see is_audio() - MP3 (ID3v2 + ID3v1), FLAC/OGG (Vorbis comments), M4A/M4B (MP4 atoms), APE (APEv2),
- * AIFF (ID3 chunk, NAME/AUTH), DSF (ID3 block), WMA (ASF), AAC (leading ID3v2); WAV/DFF/DTS by filename. Anything
+ * AIFF (ID3 chunk, NAME/AUTH), WAV (ID3 chunk, LIST/INFO), DSF (ID3 block), WMA (ASF), AAC (leading ID3v2); DFF/DTS by filename. Anything
  * without usable tags falls back to the filename (minus extension) as the title.
  * External .cue sheets and SACD .iso images are expanded into one row per track, the way stock V2.57 writes them (see
  * cue_finish, iso_finish).
@@ -38,6 +38,7 @@
 #include <sys/stat.h>
 #include "sqlite3.h"
 #include "scanner.h"
+#include "library.h"
 #include "musicdb.h"   /* DISKOS_AUDIOBOOKS gate: whether .m4b files are indexed */
 
 #ifndef DB_PATH
@@ -83,7 +84,8 @@ static int g_prune_blocked;   /* preservation infrastructure failed: retain glob
 int scanner_active(void){ pthread_mutex_lock(&g_mu); int a=g_active; pthread_mutex_unlock(&g_mu); return a; }
 void scanner_progress(int *done, int *total){
     pthread_mutex_lock(&g_mu);
-    if(done)*done=g_done; if(total)*total=g_total;
+    if(done)*done=g_done;
+    if(total)*total=g_total;
     pthread_mutex_unlock(&g_mu);
 }
 int scanner_take_finished(void){
@@ -124,7 +126,7 @@ static int has_ext(const char *name, const char *ext){
 }
 /* Audio files diskOS indexes: stock V2.57's list plus Ogg Opus. Real tags from MP3 (ID3), FLAC and OGG (Vorbis comments),
  * M4A/M4B (MP4 atoms), APE (APEv2, ID3v1 fallback), AIFF (ID3 chunk, NAME/AUTH), DSF (ID3 block), WMA (ASF) and a
- * leading ID3v2 on AAC; WAV/DFF/DTS fall back to the filename. External .cue sheets become per-track rows after the
+ * leading ID3v2 on AAC and WAV (ID3 chunk, LIST/INFO); DFF/DTS fall back to the filename. External .cue sheets become per-track rows after the
  * walk (cue_finish); SACD .iso images likewise become per-track rows (iso_finish). */
 static int is_audio(const char *name){
     if(has_ext(name,".m4b")) return DISKOS_AUDIOBOOKS;   /* books indexed only when the audiobook feature is enabled */
@@ -255,20 +257,91 @@ static int tag_int(const char *s){
     return (int)v;
 }
 
+static _Thread_local libsort_tags g_tag_sort;
+static void sort_take(int field, const unsigned char *p, size_t n){
+    char value[LIBSORT_LEN];
+    if(!libsort_text(value,p,n)) return;
+    char *old=g_tag_sort.value[field];
+    int a=code4(value), b=code4(old), c=strcasecmp(value,old);
+    if(!old[0] || a<b || (a==b && (c<0 || (!c && strcmp(value,old)<0)))) strcpy(old,value);
+}
+static int sort_comment(const unsigned char *p, size_t n){
+    static const char *const keys[]={"ARTISTSORT=","ALBUMARTISTSORT=","ALBUMSORT="};
+    for(int i=0;i<3;i++){
+        size_t k=strlen(keys[i]);
+        if(n>=k && !strncasecmp((const char *)p,keys[i],k)){ sort_take(i,p+k,n-k); return 1; }
+    }
+    return 0;
+}
+/* Decode sort text without the display reader's truncation or repair rules. */
+static void sort_encoded(int field, int enc, const unsigned char *p, size_t n){
+    while(n && !p[n-1] && (enc==0 || enc==3)) n--;
+    if(enc==3){ sort_take(field,p,n); return; }
+    char value[4*LIBSORT_LEN+1]; value[0]=0;
+    if(enc==0){
+        if(n>=LIBSORT_LEN) return;
+        id3_decode(enc,p,(int)n,value,sizeof value);
+    } else if(enc==1 || enc==2){
+        int be=enc==2;
+        if(enc==1){
+            if(n<2 || !((p[0]==0xff && p[1]==0xfe) || (p[0]==0xfe && p[1]==0xff))) return;
+            be=p[0]==0xfe; p+=2; n-=2;
+        }
+        if(n>2*LIBSORT_LEN || n%2) return;
+        char *out=value, *end=value+sizeof value-1;
+        for(size_t i=0;i<n;i+=2){
+            unsigned cp=be ? (p[i]<<8)|p[i+1] : (p[i+1]<<8)|p[i];
+            if(!cp){ for(size_t j=i;j<n;j++) if(p[j]) return; break; }
+            if(cp>=0xd800 && cp<=0xdbff){
+                if(n-i<4) return;
+                unsigned lo=be ? (p[i+2]<<8)|p[i+3] : (p[i+3]<<8)|p[i+2];
+                if(lo<0xdc00 || lo>0xdfff) return;
+                cp=0x10000+((cp-0xd800)<<10)+(lo-0xdc00); i+=2;
+            } else if(cp>=0xdc00 && cp<=0xdfff) return;
+            if(cp>=0x10000){
+                if(end-out<4) return;
+                *out++=(char)(0xf0|(cp>>18)); *out++=(char)(0x80|((cp>>12)&63));
+                *out++=(char)(0x80|((cp>>6)&63)); *out++=(char)(0x80|(cp&63));
+            } else put_u8(&out,end,cp);
+        }
+        *out=0;
+    } else return;
+    sort_take(field,(const unsigned char *)value,strlen(value));
+}
+static void sort_id3(const char *id, const unsigned char *p, size_t n){
+    if(!n) return;
+    int field=!strcmp(id,"TSOP") ? 0 : !strcmp(id,"TSO2") ? 1 : !strcmp(id,"TSOA") ? 2 : -1;
+    if(field==1 && !g_tag_sort.native_aa){ g_tag_sort.native_aa=1; g_tag_sort.value[1][0]=0; }
+    if(field>=0){ sort_encoded(field,p[0],p+1,n-1); return; }
+    if(strcmp(id,"TXXX") || g_tag_sort.native_aa) return;
+    int enc=*p++; n--; size_t size=(enc==1 || enc==2) ? 2 : 1, split=0;
+    while(split+size<=n && (p[split] || (size==2 && p[split+1]))) split+=size;
+    if(split+size>n || split>64) return;
+    char desc[128]; id3_decode(enc,p,(int)split,desc,sizeof desc);
+    if(strcasecmp(desc,"ALBUMARTISTSORT")) return;
+    const unsigned char *v=p+split+size; size_t len=n-split-size;
+    if(enc==1 && len>=2 && ((v[0]==0xff && v[1]==0xfe) || (v[0]==0xfe && v[1]==0xff))){
+        sort_encoded(1,enc,v,len);
+    } else if(enc==1 && len<=2*LIBSORT_LEN && split>=2){
+        unsigned char full[2*LIBSORT_LEN+2]; memcpy(full,p,2); memcpy(full+2,v,len);
+        sort_encoded(1,1,full,len+2);
+    } else sort_encoded(1,enc,v,len);
+}
+
 /* The fields a tag reader fills. A reader that streams its tag (reading only the parts it uses) saves them first and
  * puts them back if a read fails part way, so a failed read leaves them untouched, as the old whole-tag read did. */
-typedef struct { char title[TAGLEN], artist[TAGLEN], album[TAGLEN], genre[TAGLEN], album_artist[TAGLEN]; int track, disc; } tag_fields;
+typedef struct { char title[TAGLEN], artist[TAGLEN], album[TAGLEN], genre[TAGLEN], album_artist[TAGLEN]; int track, disc; libsort_tags sort; } tag_fields;
 static void tags_save(tag_fields *s, const char *title,const char *artist,const char *album,const char *genre,
                       const char *album_artist, const int *track, const int *disc){
     snprintf(s->title,TAGLEN,"%s",title); snprintf(s->artist,TAGLEN,"%s",artist); snprintf(s->album,TAGLEN,"%s",album);
     snprintf(s->genre,TAGLEN,"%s",genre); snprintf(s->album_artist,TAGLEN,"%s",album_artist);
-    s->track = *track; s->disc = *disc;
+    s->track = *track; s->disc = *disc; s->sort=g_tag_sort;
 }
 static void tags_restore(const tag_fields *s, char *title,char *artist,char *album,char *genre,
                          char *album_artist, int *track, int *disc){
     snprintf(title,TAGLEN,"%s",s->title); snprintf(artist,TAGLEN,"%s",s->artist); snprintf(album,TAGLEN,"%s",s->album);
     snprintf(genre,TAGLEN,"%s",s->genre); snprintf(album_artist,TAGLEN,"%s",s->album_artist);
-    *track = s->track; *disc = s->disc;
+    *track = s->track; *disc = s->disc; g_tag_sort=s->sort;
 }
 
 /* Move a forward tag walk from file offset *at to `to`. A short gap is read through: a seek drops stdio's buffer, so
@@ -289,7 +362,7 @@ static int skip_to(FILE *f, off_t *at, off_t to){
 
 /* The ID3 text frames id3v2_read uses; every other frame body (APIC artwork above all) is never read. */
 static int id3_frame_used(const char *id){
-    static const char *const used[] = { "TIT2","TT2","TPE1","TP1","TALB","TAL","TCON","TCO","TRCK","TRK","TPOS","TPA","TPE2","TP2" };
+    static const char *const used[] = { "TIT2","TT2","TPE1","TP1","TALB","TAL","TCON","TCO","TRCK","TRK","TPOS","TPA","TPE2","TP2","TSOP","TSO2","TSOA","TXXX" };
     for(unsigned i = 0; i < sizeof used / sizeof used[0]; i++) if(!strcmp(id, used[i])) return 1;
     return 0;
 }
@@ -338,14 +411,20 @@ static int id3v2_read(FILE *f, char *title,char *artist,char *album,char *genre,
         if(id[0]==0) break;                       /* padding */
         long fsize;
         if(ver==2) fsize = (fh[3]<<16)|(fh[4]<<8)|fh[5];
-        else if(ver==4) fsize = synch32(fh+4);
+        else if(ver==4){ if((fh[4]|fh[5]|fh[6]|fh[7])&0x80){ ok=0; break; } fsize = synch32(fh+4); }
         else fsize = be32(fh+4);
         if(fsize<=0 || fsize > tagsize - p - fhdr){ ok=0; break; }   /* overflow-safe (tagsize-p-fhdr >= 0) */
         if(id[0]=='T' && id3_frame_used(id)){     /* text frame: enc byte + text */
+            int sort=!strcmp(id,"TSOP") || !strcmp(id,"TSO2") || !strcmp(id,"TSOA") || !strcmp(id,"TXXX");
+            if(sort && fsize>4*LIBSORT_LEN){
+                if(!strcmp(id,"TSO2") && !g_tag_sort.native_aa){ g_tag_sort.native_aa=1; g_tag_sort.value[1][0]=0; }
+                p+=fhdr+fsize; continue;   /* oversized scalar, not a failed container read */
+            }
             unsigned char *body = malloc((size_t)fsize);
             if(!body){ if(rerr)*rerr=1; ok=0; break; }                             /* OOM: a real read failure (ferror won't catch it) */
             if(fread(body,1,(size_t)fsize,f) != (size_t)fsize){ free(body); ok=0; break; }
             at += fsize;
+            if(ver==2 || (!unsync && fh[9]==0)) sort_id3(id,body,(size_t)fsize);
             int enc=body[0];
             char val[TAGLEN]; id3_decode(enc, body+1, (int)fsize-1, val, sizeof val);
             free(body);
@@ -404,6 +483,7 @@ static int comments_with_provenance(const unsigned char *b, uint32_t len, char *
     }
     for(uint32_t i=0;i<cnt;i++){
         uint32_t clen=le32(b+off); off+=4;
+        if(sort_comment(b+off,clen)){ off+=clen; continue; }
         char kv[1088];
         if(clen>=sizeof kv && ad_comment_wanted(b+off,clen)) return 0;
         if(clen < sizeof kv){
@@ -500,6 +580,9 @@ static void mp4_str(const unsigned char *v, long vn, char *out){
 static void mp4_take(const unsigned char *key, const unsigned char *v, long vn,
                      char *title,char *artist,char *album,char *genre,char *album_artist,int *track,int *disc){
     if(vn <= 0) return;
+    if(!memcmp(key,"soar",4)) sort_take(0,v,(size_t)vn);
+    else if(!memcmp(key,"soaa",4)) sort_take(1,v,(size_t)vn);
+    else if(!memcmp(key,"soal",4)) sort_take(2,v,(size_t)vn);
     if     (key[0]==0xA9 && key[1]=='n'&&key[2]=='a'&&key[3]=='m' && !title[0])        mp4_str(v,vn,title);
     else if(key[0]==0xA9 && key[1]=='A'&&key[2]=='R'&&key[3]=='T' && !artist[0])       mp4_str(v,vn,artist);
     else if(key[0]==0xA9 && key[1]=='a'&&key[2]=='l'&&key[3]=='b' && !album[0])        mp4_str(v,vn,album);
@@ -586,7 +669,7 @@ static int mp4_load_udta(FILE *f, unsigned char **out_buf, uint64_t *out_sz, int
 /* The ilst items mp4_take uses; every other item (the covr artwork above all) is seeked past, never read. */
 static int mp4_item_used(const unsigned char *key){
     static const unsigned char used[][4] = { {0xA9,'n','a','m'}, {0xA9,'A','R','T'}, {0xA9,'a','l','b'},
-                                             {0xA9,'g','e','n'}, {'a','A','R','T'}, {'t','r','k','n'}, {'d','i','s','k'} };
+                                             {0xA9,'g','e','n'}, {'a','A','R','T'}, {'t','r','k','n'}, {'d','i','s','k'}, {'s','o','a','r'}, {'s','o','a','a'}, {'s','o','a','l'} };
     for(unsigned i = 0; i < sizeof used / sizeof used[0]; i++) if(!memcmp(key, used[i], 4)) return 1;
     return 0;
 }
@@ -635,7 +718,17 @@ static void mp4_read(FILE *f, char *title,char *artist,char *album,char *genre,
                 else if(sz == 0) sz = (uint64_t)(ie - p);
                 if(sz < (uint64_t)hdr || sz > (uint64_t)(ie - p)){ ok=0; break; }
                 at = p + hdr;
-                if(mp4_item_used(h+4)){
+                if(!memcmp(h+4,"soar",4) || !memcmp(h+4,"soaa",4) || !memcmp(h+4,"soal",4)){
+                    off_t data; uint64_t size;
+                    if(!mp4_find_child(f,p+hdr,p+(off_t)sz,"data",&data,&size,rerr) || size<8){ ok=0; break; }
+                    if(size-8<LIBSORT_LEN){
+                        unsigned char value[LIBSORT_LEN]; size_t n=(size_t)(size-8);
+                        if(!ad_read_at(f,data+8,value,n)){ ok=0; break; }
+                        mp4_take(h+4,value,(long)n,title,artist,album,genre,album_artist,track,disc);
+                    }
+                    at=ftello(f);
+                    if(at<0){ ok=0; break; }
+                } else if(mp4_item_used(h+4)){
                     size_t n = (size_t)(sz - (uint64_t)hdr);
                     unsigned char *b = malloc(n ? n : 1);
                     if(!b){ if(rerr) *rerr = 1; ok = 0; break; }                       /* OOM: a real read failure (don't clobber the row) */
@@ -856,6 +949,9 @@ static void ape_read(FILE *f, char *title,char *artist,char *album,char *genre,
             const char *key = (const char *)b+off; off = kend + 1;
             if(vlen > blen - off){ if(rerr)*rerr=1; break; }                             /* overflow-safe */
             if(((flags >> 1) & 3) == 0){                             /* UTF-8 text item */
+                if(!strcasecmp(key,"ARTISTSORT")) sort_take(0,b+off,vlen);
+                else if(!strcasecmp(key,"ALBUMARTISTSORT")) sort_take(1,b+off,vlen);
+                else if(!strcasecmp(key,"ALBUMSORT")) sort_take(2,b+off,vlen);
                 char v[TAGLEN];
                 uint32_t n = vlen < sizeof v - 1 ? vlen : (uint32_t)sizeof v - 1;
                 memcpy(v, b+off, n); v[n] = 0;
@@ -902,6 +998,124 @@ static void id3v2_read_bounded(FILE *f, off_t room, char *title,char *artist,cha
     if(fseeko(f, at, SEEK_SET)!=0){ if(rerr) *rerr=1; return; }
     id3v2_read(f,title,artist,album,genre,album_artist,track,disc,rerr);
 }
+/* ---- RIFF / RF64 WAVE ----
+ * Seek over every unwanted payload, including data. Bound both chunk walks together to 256 headers,
+ * INFO values to 4 KiB, embedded ID3 tags to 256 KiB, and total tag payloads to 1 MiB.
+ * Keep INFO separate until the walk ends: ID3 wins regardless of chunk order.
+ * Placeholder/oversized RIFF or RF64 lengths use EOF; truncated data ends the walk.
+ * Other malformed containers publish no partial tags; the caller supplies the
+ * filename and preserves previously stored tags. */
+static void wav_read(FILE *f, char *title,char *artist,char *album,char *genre,
+                     char *album_artist, int *track, int *disc, int *rerr){
+    unsigned char h[12];
+    off_t size = file_size(f);
+    if(size < 12 || !ad_read_at(f,0,h,12) || memcmp(h+8,"WAVE",4)) goto bad;
+    int rf64 = !memcmp(h,"RF64",4);
+    if(!rf64 && memcmp(h,"RIFF",4)) goto bad;
+    uint64_t end = (uint64_t)size, pos = 12, data_size = 0;
+    unsigned char table[64][12]; unsigned table_n = 0;
+    unsigned char used[64] = {0};
+    if(rf64){
+        unsigned char ds[36];
+        if(le32(h+4)!=UINT32_MAX || !ad_read_at(f,12,ds,sizeof ds) || memcmp(ds,"ds64",4)) goto bad;
+        uint32_t n = le32(ds+4);
+        uint64_t riff_size = (uint64_t)le32(ds+8) | ((uint64_t)le32(ds+12)<<32);
+        data_size = (uint64_t)le32(ds+16) | ((uint64_t)le32(ds+20)<<32); table_n = le32(ds+32);
+        if(n < 28 || table_n > 64 || table_n > (n-28)/12 ||
+           (riff_size && riff_size < 4)) goto bad;
+        if(riff_size && riff_size <= end-8) end = riff_size+8;
+        if(end < 20 || n > end-20) goto bad;
+        if(table_n && !ad_read_at(f,48,table[0],table_n*12)) goto bad;
+        pos = 20 + (uint64_t)n + (n&1);
+    } else {
+        uint32_t n = le32(h+4);
+        if(n && n < 4) goto bad;
+        if(n && n != UINT32_MAX && (uint64_t)n <= end-8)
+            end = (uint64_t)n+8;
+    }
+    tag_fields id = {0}, info = {0};
+    unsigned steps = 0, budget = 1024*1024;
+    while(pos < end){
+        unsigned char c[8];
+        if(++steps > 256 || end-pos < 8 || !ad_read_at(f,(off_t)pos,c,8)) goto bad;
+        pos += 8;
+        uint64_t len = le32(c+4);
+        if(rf64 && len==UINT32_MAX){
+            if(!memcmp(c,"data",4)) len = data_size;
+            else {
+                unsigned i;
+                for(i=0; i<table_n; i++) if(!used[i] && !memcmp(c,table[i],4)) break;
+                if(i==table_n) goto bad;
+                used[i]=1; len=(uint64_t)le32(table[i]+4) | ((uint64_t)le32(table[i]+8)<<32);
+            }
+        }
+        if(len > end-pos){
+            if(!memcmp(c,"data",4) && end == (uint64_t)size){
+                pos = end;
+                break;
+            }
+            goto bad;
+        }
+        if(!memcmp(c,"id3 ",4) || !memcmp(c,"ID3 ",4)){
+            if(len > 256*1024 || len > budget) goto bad;
+            budget -= (unsigned)len;
+            int err = 0;
+            id3v2_read_bounded(f,(off_t)len,id.title,id.artist,id.album,id.genre,
+                               id.album_artist,&id.track,&id.disc,&err);
+            if(err) goto bad;
+        } else if(!memcmp(c,"LIST",4)){
+            unsigned char kind[4];
+            if(len < 4 || !ad_read_at(f,(off_t)pos,kind,4)) goto bad;
+            if(!memcmp(kind,"INFO",4)){
+                uint64_t p = pos+4, stop = pos+len;
+                while(p < stop){
+                    unsigned char item[8], text[4096];
+                    if(++steps > 256 || stop-p < 8 || !ad_read_at(f,(off_t)p,item,8)) goto bad;
+                    p += 8;
+                    uint32_t n = le32(item+4);
+                    if(n > stop-p) goto bad;
+                    char *dst = !memcmp(item,"INAM",4) ? info.title :
+                                !memcmp(item,"IART",4) ? info.artist :
+                                !memcmp(item,"IPRD",4) ? info.album :
+                                !memcmp(item,"IGNR",4) ? info.genre : NULL;
+                    int is_track = !memcmp(item,"ITRK",4) || !memcmp(item,"IPRT",4);
+                    if(dst || is_track){
+                        if(n > sizeof text || n > budget) goto bad;
+                        budget -= n;
+                        if(n && !ad_read_at(f,(off_t)p,text,n)) goto bad;
+                        size_t bytes = 0; while(bytes < n && text[bytes]) bytes++;
+                        char val[TAGLEN];
+                        if(utf8_ok(text,bytes)){
+                            size_t copy = bytes < TAGLEN-1 ? bytes : TAGLEN-1;
+                            while(copy < bytes && copy && (text[copy]&0xC0)==0x80) copy--;
+                            memcpy(val,text,copy); val[copy]=0; str_trim(val);
+                        } else id3_decode(0,text,(int)bytes,val,TAGLEN);
+                        if(dst && !dst[0]) snprintf(dst,TAGLEN,"%s",val);
+                        if(is_track && !info.track) info.track=tag_int(val);
+                    }
+                    p += n;
+                    if((n&1) && p==stop) goto bad;
+                    p += n&1;
+                }
+            }
+        }
+        pos += len;
+        if((len&1) && pos==end) goto bad;
+        pos += len&1;
+    }
+    if(pos != end) goto bad;
+    if(!id.title[0]) snprintf(id.title,TAGLEN,"%s",info.title);
+    if(!id.artist[0]) snprintf(id.artist,TAGLEN,"%s",info.artist);
+    if(!id.album[0]) snprintf(id.album,TAGLEN,"%s",info.album);
+    if(!id.genre[0]) snprintf(id.genre,TAGLEN,"%s",info.genre);
+    if(!id.track) id.track=info.track;
+    id.sort=g_tag_sort;
+    tags_restore(&id,title,artist,album,genre,album_artist,track,disc);
+    return;
+bad:
+    if(rerr) *rerr=1;
+}
+
 static void aiff_read(FILE *f, char *title,char *artist,char *album,char *genre,
                       char *album_artist, int *track, int *disc, int *rerr){
     unsigned char h[12];
@@ -1003,6 +1217,13 @@ static void wma_read(FILE *f, char *title,char *artist,char *album,char *genre,
                 uint32_t vt = d[p]|d[p+1]<<8, vl = d[p+2]|d[p+3]<<8; p += 4;
                 if(vl > dl - p){ if(rerr)*rerr=1; break; }
                 const unsigned char *v = d+p;
+                if(vt==0){
+                    int field=!strcmp(nm,"WM/ArtistSortOrder") ? 0 : !strcmp(nm,"WM/AlbumArtistSortOrder") ? 1 : !strcmp(nm,"WM/AlbumSortOrder") ? 2 : -1;
+                    if(field>=0){
+                        unsigned char full[2*LIBSORT_LEN+2]; full[0]=255; full[1]=254;
+                        if(vl<=2*LIBSORT_LEN){ memcpy(full+2,v,vl); sort_encoded(field,1,full,vl+2); }
+                    }
+                }
                 char val[TAGLEN] = "";
                 if(vt == 0) utf16le_decode(v, vl, val, TAGLEN);                        /* Unicode string */
                 else if(vt == 3 && vl >= 4) snprintf(val, sizeof val, "%u", (unsigned)le32(v));   /* DWORD */
@@ -1023,7 +1244,7 @@ static void wma_read(FILE *f, char *title,char *artist,char *album,char *genre,
 }
 
 /* Read tags + fill a filename fallback. Return code drives how the caller writes the row:
- *   1  = tags read (or a no-tag container like WAV) -> safe to INSERT a new row OR UPDATE in place.
+ *   1  = tags read (or an untagged file) -> safe to INSERT a new row OR UPDATE in place.
  *   0  = a tag-bearing file that could NOT be OPENED (transient I/O) -> preserve existing tags and
  *        do NOT insert a new one (title..genre are left empty; a file we can't open at all is skipped).
  *  -1  = OPENED but its tags could not be LOADED (a mid-read I/O error, or oversized/hostile atoms):
@@ -1035,11 +1256,10 @@ static int tags_with_provenance(const char *path, const char *fname,
                           char *album_artist, int *track, int *disc, long long *dur_ms, int *title_tag){
     title[0]=artist[0]=album[0]=genre[0]=album_artist[0]=0; *track=0; *disc=0; *dur_ms=0;
     if(title_tag) *title_tag=0;
+    memset(&g_tag_sort,0,sizeof g_tag_sort);
     int rerr=0;
     FILE *f=fopen(path,"rb");
-    if(!f && (has_ext(fname,".flac") || has_ext(fname,".mp3") || has_ext(fname,".m4a") || has_ext(fname,".m4b")
-              || has_ext(fname,".ogg") || has_ext(fname,".opus") || has_ext(fname,".oga") || has_ext(fname,".ape") || has_ext(fname,".aif") || has_ext(fname,".aiff")
-              || has_ext(fname,".wma") || has_ext(fname,".dsf") || has_ext(fname,".aac")))
+    if(!f)
         return 0;   /* unopened: preserve the entire existing row (incl. length), no new row */
     if(f){
         if(has_ext(fname,".flac")) flac_read(f,title,artist,album,genre,album_artist,track,disc,&rerr);
@@ -1048,12 +1268,12 @@ static int tags_with_provenance(const char *path, const char *fname,
         else if(has_ext(fname,".ogg") || has_ext(fname,".opus") || has_ext(fname,".oga")) ogg_read(f,title,artist,album,genre,album_artist,track,disc,&rerr,title_tag);
         else if(has_ext(fname,".ape")){ ape_read(f,title,artist,album,genre,album_artist,track,disc,&rerr);
                                         if(!title[0] && fseek(f,0,SEEK_SET)==0) id3v1_read(f,title,artist,album,&rerr); }
+        else if(has_ext(fname,".wav")) wav_read(f,title,artist,album,genre,album_artist,track,disc,&rerr);
         else if(has_ext(fname,".aif") || has_ext(fname,".aiff")) aiff_read(f,title,artist,album,genre,album_artist,track,disc,&rerr);
         else if(has_ext(fname,".dsf")) dsf_read(f,title,artist,album,genre,album_artist,track,disc,&rerr);
         else if(has_ext(fname,".wma")) wma_read(f,title,artist,album,genre,album_artist,track,disc,&rerr);
         else if(has_ext(fname,".aac")) id3v2_read(f,title,artist,album,genre,album_artist,track,disc,&rerr);  /* ADTS may lead with ID3v2 */
-        /* .wav/.dff/.dts (and any other accepted container) -> filename fallback below; no tag probing,
-         * so a WAV whose last 128 bytes happen to start with "TAG" isn't misread as ID3v1. */
+        /* .dff/.dts (and any other accepted container) -> filename fallback below. */
         if(ferror(f)) rerr=1;   /* ANY stream IO error during tag reads (headers/seeks/body) -> a read failure,
                                  * not "no tags" (feof/clean EOF does NOT set this, so a short valid file still
                                  * falls back to filename). Catches the header/seek paths rerr doesn't. */
@@ -1314,7 +1534,8 @@ static void upsert_song(const char *path, const char *fname){
         sqlite3_bind_int64(g_upd, 16, (sqlite3_int64)dur_ms);
         sqlite3_bind_int(g_upd,17,title_tag);
         if(sqlite3_step(g_upd)!=SQLITE_DONE){ g_scan_err=1; return; }
-        if(sqlite3_changes(g_db) > 0){                     /* existing PATH updated in place */
+        if(sqlite3_changes(g_db) > 0){
+            if(!libsort_write(g_db,path,&g_tag_sort)){ g_scan_err=1; return; }                     /* existing PATH updated in place */
             pthread_mutex_lock(&g_mu); g_done++; pthread_mutex_unlock(&g_mu);
             return;
         }
@@ -1328,7 +1549,9 @@ static void upsert_song(const char *path, const char *fname){
     sqlite3_bind_int64(g_ins, 17, (sqlite3_int64)dur_ms);   /* normalized above: failures are unknown */
     if(tst<0) sqlite3_bind_null(g_ins,18);
     else sqlite3_bind_int(g_ins,18,title_tag);
-    if(sqlite3_step(g_ins)==SQLITE_DONE){ pthread_mutex_lock(&g_mu); g_done++; pthread_mutex_unlock(&g_mu); }
+    if(sqlite3_step(g_ins)==SQLITE_DONE){
+        if(tst==1 && !libsort_write(g_db,path,&g_tag_sort)){ g_scan_err=1; return; }
+        pthread_mutex_lock(&g_mu); g_done++; pthread_mutex_unlock(&g_mu); }
     else g_scan_err=1;   /* insert failure (disk full, DB corruption) must block the commit */
 }
 
@@ -2025,6 +2248,8 @@ static int scan_sql_cancel(void *p){
 static void *scan_thread(void *arg){
     g_decode_old_tags = (int)(intptr_t)arg;   /* immutable for this whole scan */
     int ok=0, found=0;
+    sd_io_check_media();
+    uint64_t scan_media = sd_io_media_generation();
     /* Guard: if the SD isn't actually mounted at SCAN_ROOT, do NOT open a transaction or
      * DELETE anything - keep the existing library intact. This is the #1 data-loss guard:
      * an absent/late mount must never commit an empty SONG table. */
@@ -2049,11 +2274,15 @@ static void *scan_thread(void *arg){
          * scan transaction, so the stock player's playback SQL (which SELECTs IS_M3U/M3U_PATH) always
          * finds the columns instead of depending on the player winning a startup migration race.
          * ALTERs are idempotent here - a duplicate column just errors harmlessly. */
-        sqlite3_exec(g_db, "ALTER TABLE SONG ADD COLUMN IS_M3U INT DEFAULT 0;", 0,0,0);
-        sqlite3_exec(g_db, "ALTER TABLE SONG ADD COLUMN M3U_PATH TEXT DEFAULT '';", 0,0,0);
-        sqlite3_exec(g_db, "ALTER TABLE SONG ADD COLUMN ACCENT INTEGER DEFAULT 0;", 0,0,0);
+        if(!sqlite3_get_autocommit(g_db))
+            sqlite3_exec(g_db, "ALTER TABLE SONG ADD COLUMN IS_M3U INT DEFAULT 0;", 0,0,0);
+        if(!sqlite3_get_autocommit(g_db))
+            sqlite3_exec(g_db, "ALTER TABLE SONG ADD COLUMN M3U_PATH TEXT DEFAULT '';", 0,0,0);
+        if(!sqlite3_get_autocommit(g_db))
+            sqlite3_exec(g_db, "ALTER TABLE SONG ADD COLUMN ACCENT INTEGER DEFAULT 0;", 0,0,0);
         /* NULL = legacy/unknown; 0 = fallback; 1 = TITLE read before filename fallback. */
-        sqlite3_exec(g_db, "ALTER TABLE SONG ADD COLUMN TITLE_TAG INTEGER;", 0,0,0);
+        if(!sqlite3_get_autocommit(g_db))
+            sqlite3_exec(g_db, "ALTER TABLE SONG ADD COLUMN TITLE_TAG INTEGER;", 0,0,0);
         /* Non-unique index on SONG(PATH): every scanned file looks its path up (UPDATE ... WHERE PATH=?, the
          * cue check, the insert-if-new check), which without it is a full-table scan per file - quadratic, and
          * all inside the scan's write transaction. Non-unique on purpose: stock rows may repeat a PATH (cue/iso
@@ -2061,7 +2290,8 @@ static void *scan_thread(void *arg){
          * firmware's own SQLite over a real library plus duplicate cue/iso paths (tools/path_index_order_check.py:
          * V2.40 + V2.57, 3,493 queries, 0 differences); the player's joins on SONG.PATH use it instead of building
          * a temporary index each time. Best effort: without it a scan is only slower. */
-        sqlite3_exec(g_db, "CREATE INDEX IF NOT EXISTS diskos_song_path ON SONG(PATH);", 0,0,0);
+        if(!sqlite3_get_autocommit(g_db))
+            sqlite3_exec(g_db, "CREATE INDEX IF NOT EXISTS diskos_song_path ON SONG(PATH);", 0,0,0);
         /* PROVE the required columns exist (a duplicate-column ALTER error is fine, but a real
          * failure - BUSY/FULL/IOERR/corruption - is not). If any is missing, flag a scan error so
          * the commit gate below rolls back and KEEPS the existing library rather than rebuilding one
@@ -2073,7 +2303,9 @@ static void *scan_thread(void *arg){
         }   /* in_txn */
         int decided = 0;
         g_ins=NULL; g_upd=NULL; g_seen=NULL; g_cuechk=NULL; g_bookok=NULL; g_durok=NULL; g_protect=NULL;
+        if(in_txn && sqlite3_get_autocommit(g_db)) g_scan_err = 1;
         /* a required column still missing: roll back and finish now, no walk (retried on the next scan) */
+        if(in_txn && !g_scan_err && !libsort_setup(g_db)) g_scan_err=1;
         if(in_txn && !g_scan_err && sqlite3_prepare_v2(g_db, INS_SONG, -1, &g_ins,  NULL)==SQLITE_OK
            && sqlite3_prepare_v2(g_db, UPD_SONG, -1, &g_upd,  NULL)==SQLITE_OK
            && sqlite3_prepare_v2(g_db, CUE_CHECK, -1, &g_cuechk, NULL)==SQLITE_OK
@@ -2101,7 +2333,8 @@ static void *scan_thread(void *arg){
                 sqlite3_exec(g_db,"DELETE FROM seen;",0,0,0);   /* start from an empty seen-set */
                 sqlite3_exec(g_db,"DELETE FROM book_ok;",0,0,0);   /* and an empty real-tags-book set */
                 g_ncues = 0; g_nisos = 0;
-                walk(SCAN_ROOT, 0);
+                if(sqlite3_get_autocommit(g_db)) g_scan_err = 1;
+                if(!g_scan_err) walk(SCAN_ROOT, 0);
                 if(!g_scan_err) cue_finish();   /* CUE sheets found by the walk -> per-track rows */
                 if(!g_scan_err) iso_finish();   /* SACD images -> per-track rows */
                 pthread_mutex_lock(&g_mu); found = g_done; pthread_mutex_unlock(&g_mu);
@@ -2169,6 +2402,10 @@ static void *scan_thread(void *arg){
                      * decides to commit, scanner_cancel() is refused, so a "Cancelling" toast is never followed by a
                      * committed scan. */
                     int go = 0;
+                    /* A replacement card at the same mountpoint cannot validate this walk. */
+                    sd_io_check_media();
+                    if(del_ok && !libsort_finish(g_db)){ g_scan_err=1; del_ok=0; }
+                    del_ok = del_ok && scan_root_ready() && scan_media == sd_io_media_generation();
                     scan_decide(del_ok, &go); decided = 1;
                     if(go) ok = (sqlite3_exec(g_db,"COMMIT;",0,0,0)==SQLITE_OK);
                     else ok = 0;

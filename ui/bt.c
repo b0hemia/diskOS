@@ -490,14 +490,14 @@ static int bt_mac_valid(const char *mac){
 
 static int bt_info_prop(const char *buf, const char *key, char *out, int cap);
 /* A missing PCM is not a missing radio link (codec rebuilds remove PCMs).
- * Return 1 for confirmed down, 0 for connected, -1 for unknown. */
+ * Return 1 for confirmed down, 0 for connected, -1 for unknown, -2 for pending. */
 static int bt_link_disconnected(const char *mac, int timeout_ms){
     if(timeout_ms <= 0 || !bt_mac_valid(mac)) return -1;
     char cmd[160], info[4097], value[16], device[32];
     const char *marker = "\nDISKOS_INFO_DONE\n";
     snprintf(cmd, sizeof cmd, "bluetoothctl info %s 2>/dev/null && printf '\\nDISKOS_INFO_DONE\\n'", mac);
     bt_capture_drop_except(cmd);
-    run_cap_bounded(cmd, info, sizeof info, timeout_ms);
+    if(run_cap_bounded(cmd, info, sizeof info, timeout_ms) == 0) return -2;
     char *done = strstr(info, marker);
     if(!done || done[strlen(marker)]) return -1;
     *done = 0;
@@ -571,10 +571,11 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
             int disconnected = bt_link_disconnected(routed, left);
             if(disconnected == 0){ misses = absent_polls = 0; recovery_started = 0; return; }
             if(absent_polls < 10) absent_polls++;
+            if(disconnected == -2 && absent_polls < 10) return;
             if(disconnected < 0){
                 misses = 0;
-                /* Ten consecutive successful lists missing this PCM: 30 seconds at
-                 * the 3-second cadence. Brief rebuild gaps do not qualify;
+                /* Ten consecutive successful lists missing this PCM. Pending
+                 * list queries do not count. Brief rebuild gaps do not qualify;
                  * connected evidence or a returning PCM resets the grace. */
                 if(absent_polls < 10) return;
                 misses = 2;
@@ -845,7 +846,7 @@ static void bt_disconnect(const char *mac){
     if(!strcmp(mac, g_bt_autorouted)) g_bt_autorouted[0] = 0;
     bt_route_revoke(mac);
     if(g_at.stage != AT_IDLE && !strcmp(g_at.mac, mac)) bt_attempt_cancel(0);
-    ui_route_analog();          /* return audio to the DAC before dropping the A2DP link */
+    if(!strcmp(mac, ui_route_mac())) ui_route_analog();
     ui_toast(bt_disconnect_job(mac) ? "Disconnecting..." : tr("Connection failed"));
 }
 /* Forget = remove (BlueZ drops the link first). The result toast arrives when the job finishes. */
@@ -854,7 +855,7 @@ static void bt_forget(const char *mac){
     if(!strcmp(mac, g_bt_autorouted)) g_bt_autorouted[0] = 0;
     bt_route_revoke(mac);
     if(g_at.stage != AT_IDLE && !strcmp(g_at.mac, mac)) bt_attempt_cancel(0);
-    ui_route_analog();          /* route audio back to analog BEFORE removing the sink */
+    if(!strcmp(mac, ui_route_mac())) ui_route_analog();
     char cmd[128];
     snprintf(cmd, sizeof cmd, "bluetoothctl remove %s >/dev/null 2>&1", mac);
     unsigned h = proc_start(cmd, BT_JOB_MS, 16);
@@ -1274,7 +1275,14 @@ static void radio_on_poll_cb(lv_timer_t *t){
 /* The one Bluetooth power path: the page's switch and the Settings > Network row both call it. An explicit enable
  * replaces the boot-restore observer with its own radio poll (bt_enable); Off cancels both (bt_disable). */
 int bt_power_pending(void){ return g_radio_timer != NULL; }   /* a start made here is still waiting for the adapter */
+static int bt_power_off_ready(void){
+    if(!ui_route_mac()[0] || ui_route_analog() == 0) return 1;
+    if(g_sw) lv_obj_add_state(g_sw, LV_STATE_CHECKED);
+    ui_toast(tr("Couldn't switch output - try again"));
+    return 0;
+}
 void bt_power_set(int on){
+    if(!on && !bt_power_off_ready()) return;
     if(on){
         cfg_set_int("bt_on", 1);   /* persist intent so boot restores it (mirror WiFi) */
         bt_enable();
@@ -1288,7 +1296,6 @@ void bt_power_set(int on){
         if(g_radio_timer){ lv_timer_del(g_radio_timer); g_radio_timer = NULL; }
         bt_attempt_cancel(0);  /* a pending attempt must not scan_kick() or route while BT is off */
         scan_abort();          /* cancel any pending/active scan so it can't render over "off" */
-        ui_route_analog();     /* return audio to the DAC before killing the BT stack */
         bt_disable();
         list_msg("Bluetooth is off");
     }
@@ -1301,9 +1308,10 @@ static void sw_cb(lv_event_t *e){
 }
 
 /* Quick Settings tile short-press: flip BT + persist intent, no screen-specific UI.
- * Mirrors sw_cb's actions (bt_boot_restore/keepalive enforce the intent). Returns new state. */
+ * Mirrors sw_cb's actions (bt_boot_restore/keepalive enforce the intent). Returns new state, -1 if refused. */
 int bt_toggle(void){
     int on = !bt_radio_on();   /* flip the ACTUAL radio state, not the (possibly stale) persisted intent */
+    if(!on && !bt_power_off_ready()) return -1;
     cfg_set_int("bt_on", on);
     if(on){
         bt_enable();
@@ -1315,7 +1323,6 @@ int bt_toggle(void){
         if(g_radio_timer){ lv_timer_del(g_radio_timer); g_radio_timer = NULL; }        /* cancel the bring-up poll too */
         bt_attempt_cancel(0);  /* a pending attempt must not scan_kick() or route while BT is off */
         scan_abort();          /* cancel any pending/active scan */
-        ui_route_analog();     /* return audio to the DAC before killing the BT stack */
         bt_disable();
     }
     /* keep the BT screen's switch in sync so it reflects reality when opened later */

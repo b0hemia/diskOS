@@ -5,6 +5,14 @@ bundles. See `../NOTICE.md` for the component->license mapping and the static-li
 
 | Component (bundled) | License | Full text |
 |---|---|---|
+| Unicode 17.0.0 bidi conformance data (`tools/hbcanary/bidi/`, test fixtures only) | Unicode-3.0 (Unicode License v3) | [`Unicode-License-v3.txt`](Unicode-License-v3.txt) (verbatim from https://www.unicode.org/license.txt) |
+| HarfBuzz 14.6.0 | Old MIT (library); MIT, OFL-1.1, Apache-2.0 and public-domain corpus terms in retained subtrees | [`HarfBuzz-COPYING`](HarfBuzz-COPYING); additional notices under `../ui/third_party/harfbuzz-14.6.0/` |
+| SheenBidi 3.0.0 | Apache-2.0 | [`SheenBidi-Apache-2.0.txt`](SheenBidi-Apache-2.0.txt) |
+| Noto Sans Gurmukhi / Gurmukhi UI (canary and embedded faces) | OFL-1.1 | [`OFL-Gurmukhi.txt`](OFL-Gurmukhi.txt) |
+| Noto Sans Devanagari (canary and embedded faces) | OFL-1.1 | [`OFL-Devanagari.txt`](OFL-Devanagari.txt) |
+| Noto Naskh Arabic (canary and embedded face) | OFL-1.1 | [`OFL-NotoNaskhArabic.txt`](OFL-NotoNaskhArabic.txt) |
+| Noto Sans Hebrew (canary and embedded face) | OFL-1.1 | [`OFL-NotoSansHebrew.txt`](OFL-NotoSansHebrew.txt) |
+| Lato Regular (HarfBuzz canary) | OFL-1.1 | [`OFL-Lato.txt`](OFL-Lato.txt) |
 | usbboot | GPL-2.0-or-later | [`GPL-2.0.txt`](GPL-2.0.txt) |
 | squashfs-tools 4.6.1 (Linux), 4.7.5 (macOS arm64) | GPL-2.0-or-later | [`GPL-2.0.txt`](GPL-2.0.txt) |
 | liblzo2 (static in mksquashfs/unsquashfs) | GPL-2.0-or-later | [`GPL-2.0.txt`](GPL-2.0.txt) |

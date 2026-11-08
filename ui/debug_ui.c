@@ -69,7 +69,7 @@ static int ssh_running(void){
     struct dirent *e; int found = 0;
     while((e = readdir(d))){
         if(e->d_name[0] < '0' || e->d_name[0] > '9') continue;
-        char p[64]; snprintf(p, sizeof p, "/proc/%s/comm", e->d_name);
+        char p[sizeof e->d_name + sizeof "/proc//comm"]; snprintf(p, sizeof p, "/proc/%s/comm", e->d_name);
         FILE *f = fopen(p, "r"); if(!f) continue;
         char c[32] = ""; if(fgets(c, sizeof c, f) && strncmp(c, "dropbearmulti", 13) == 0) found = 1;
         fclose(f);

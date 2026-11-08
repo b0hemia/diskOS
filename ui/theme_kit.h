@@ -129,6 +129,9 @@ typedef struct { lv_obj_t *root, *clock, *date, *weather, *track, *artist, *face
 typedef enum { KIT_EMPTY_LYRICS, KIT_EMPTY_UPNEXT, KIT_EMPTY_LIBRARY, KIT_EMPTY_SEARCH } kit_empty_kind_t;
 typedef enum { KIT_VALUE_COUNT, KIT_VALUE_DURATION } kit_value_kind_t;
 /* Called only by rows that actually have a separate right-hand value. */
+void kit_row_recycle(lv_obj_t *row, lv_obj_t **labels, int count);
+void kit_row_rebind(lv_obj_t *row);
+void kit_row_decor_reset(lv_obj_t *row);
 void kit_row_value(lv_obj_t *row, lv_obj_t *title, lv_obj_t *sub, lv_obj_t *value, kit_value_kind_t kind);
 void kit_cursor_sync(int backlight_on); /* navigation/backlight lifecycle for terminal headers */
 #ifdef DISKOS_HOST

@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -45,6 +46,7 @@ struct cast_session {
      * (refused, or reattach found it gone), 4 handed over (READY): never rolled back. owned_set/owned/lst survive a reconnect; the rest is per connection. */
     int launch_id, lst, owned_set, app_tx, live_app, cleanup;
     /* owned media: mid is the adopted mediaSessionId (0 none); content/seen_ver follow cast_session_track(); pend_media: pend is a media command */
+    int stopped, absence, probe_id, probe_ver; /* explicit absence needs a correlated media GET_STATUS in this track generation */
     int mid, seen_ver, pend_media; cs_op command_op; char content[CM_TEXT];
     /* LOAD / STOP in flight (request id, 0 none; independent of pend). ldw is the request being sent, ld_sent the ld_ver it came from:
      * a reply is only accepted while ld_ver == ld_sent (not superseded). */
@@ -69,6 +71,7 @@ static void restore_media(cast_session *s)
 {
     if (!s->retained.media_id) return;
     s->mid = s->snap.media_id = s->retained.media_id;
+    s->stopped = s->snap.stopped = s->retained.stopped;
     s->snap.player = s->retained.player; s->snap.idle = s->retained.idle;
     s->snap.media_time = s->retained.media_time;
     strcpy(s->content, s->retained_content);
@@ -145,9 +148,10 @@ static int drop(cast_session *s, int r)
     s->tls = NULL; s->fd = -1;
     return r;
 }
-static void fin(cast_session *s, cs_state st, int err, int clean)
+static void fin(cast_session *s, cs_state st, int err, int clean, const char *reason)
 {
     if (s->fin) return;
+    fprintf(stderr, "Cast session end reason=%s state=%d error=%d clean=%d\n", reason, st, err, clean);
     s->fin = st; s->fin_err = err; s->fin_clean = clean;
 }
 /* An app this attempt launched that was never handed over (not READY) must not be left running. Finish the pending
@@ -215,6 +219,7 @@ static void sync_track(cast_session *s) /* a new cast_session_track() forgets th
         memcpy(s->content, s->want, sizeof s->content);
         s->track_load = s->want_load;
         s->mid = 0;
+        s->stopped = s->absence = s->probe_id = 0;
     }
     pthread_mutex_unlock(&s->mu);
 }
@@ -239,6 +244,7 @@ static int ld_end(cast_session *s, int state, int err)
 }
 static void stop_end(cast_session *s, int state, int err)
 {
+    fprintf(stderr, "Cast stop job_state=%d error=%d\n", state, err);
     pthread_mutex_lock(&s->mu); s->snap.stop_state = state; s->snap.stop_error = err; s->snap.generation++; pthread_mutex_unlock(&s->mu);
     s->stop_id = 0;
 }
@@ -302,7 +308,7 @@ static int start_op(cast_session *s, const op_t *o, cm_command *c, const char **
 {
     int media = o->op >= CS_OP_PLAY && o->op <= CS_OP_SEEK; cm_volume v;
     *c = (cm_command){ 0 }; s->command_op = o->op; sync_track(s);
-    if (media && (!s->mid || o->track_ver != s->seen_ver)) return 0;
+    if (media && (!s->mid || s->stopped || o->track_ver != s->seen_ver)) return 0;
     switch (o->op) {
     case CS_OP_STATUS: c->kind = CM_GET_STATUS; c->receiver = 1; break;
     case CS_OP_PLAY: c->kind = CM_PLAY; break;
@@ -316,7 +322,7 @@ static int start_op(cast_session *s, const op_t *o, cm_command *c, const char **
         c->muted = o->muted >= 0 ? o->muted : v.present & CM_MUTED ? v.muted : -1;
         if (o->op == CS_OP_VOLUME_STEP) {
             if (!(v.present & CM_LEVEL)) return 0;
-            c->level = v.level + o->v * 0.02;
+            c->level = round((v.level + o->v * 0.01) * 100) / 100;
             if (c->level < 0) c->level = 0;
             if (c->level > 1) c->level = 1;
         }
@@ -350,16 +356,17 @@ static int next_control(cast_session *s, cm_command *c, int64_t t, const char **
     } else if (s->todo & T_APP) {
         c->kind = CM_CONNECT; s->todo &= ~T_APP; s->app_tx = 1; *dest = s->owned.transport_id;
     } else if (s->phase == PH_READY && !s->pend) {
-        op_t o;
+        op_t o = { 0 };
         if (!s->stop_id && load_next(s, c, dest, t)) return 1;
         if (!s->ld_id && !s->stop_id && stop_next(s, c, dest, t)) return 1;
         if (s->ld_id || s->stop_id) return 0; /* one command at a time */
         while (!c->request_id && pop_op(s, &o)) if (!start_op(s, &o, c, dest, t)) op_error(s, CS_E_REFUSED);
         sync_track(s);
-        if (!c->request_id && s->mid && t >= s->next_media_status) {
+        if (!c->request_id && s->mid && !s->stopped && (s->absence || t >= s->next_media_status)) {
             *c = (cm_command){ .kind = CM_GET_STATUS, .request_id = ++s->req };
             *dest = s->owned.transport_id;
             s->pend = c->request_id; s->pend_media = 1; s->command_op = 0;
+            s->probe_id = c->request_id; s->probe_ver = s->seen_ver; s->absence = 0;
             s->pend_dl = t + s->cfg.confirm_ms;
             s->next_media_status = t + 1000;
         }
@@ -376,7 +383,7 @@ static int next_msg(cast_session *s)
         c.kind = CM_PING; s->next_ping = t + s->cfg.ping_ms; s->hb_last = 1;
     } else if (next_control(s, &c, t, &dest)) s->hb_last = 0;
     else return 0;
-    if ((r = queue(s, dest, c))) fin(s, CS_FAILED, r, 0);
+    if ((r = queue(s, dest, c))) fin(s, CS_FAILED, r, 0, "command queue failed");
     return 1;
 }
 /* Evidence that the receiver or the app session is no longer ours: report it, drop every queued and unsent command, and
@@ -389,7 +396,7 @@ static void taken(cast_session *s, const cm_app *by)
     s->nops = 0; pthread_mutex_unlock(&s->mu);
     s->pend = 0; s->live_app = 0;
     if (!s->w.tx_used) s->w.tx_len = 0;
-    fin(s, CS_TAKEN_OVER, CS_E_TAKEOVER, 1);
+    fin(s, CS_TAKEN_OVER, CS_E_TAKEOVER, 1, "takeover");
 }
 static int word(const char *v, const char *const *t, int n)
 {
@@ -406,6 +413,10 @@ static void snap_media(cast_session *s, const cm_media *e) /* mu held */
     s->snap.media_id = s->mid;
     if (*e->player_state) { s->snap.player = word(e->player_state, pl, 4); s->snap.idle = word(e->idle_reason, ir, 4); }
     if (e->present & CM_TIME) s->snap.media_time = e->current_time;
+    if (s->snap.player == CS_PL_IDLE && s->snap.idle == CS_IDLE_CANCELLED) {
+        s->stopped = s->snap.stopped = 1;
+        s->snap.confirmed = 0;
+    }
     s->snap.generation++;
     remember_media(s);
 }
@@ -507,15 +518,25 @@ static void media_msg(cast_session *s, const char *p)
     }
     sync_track(s);
     if (s->ld_id) { load_msg(s, &st); return; }
-    if (s->stop_id && st.request_id == s->stop_id &&
-        st.has_status && !st.media_count) {
+    /* Nonzero replies must belong to a live request. In particular a delayed reply
+     * to an older LOAD or poll cannot change a replacement, even if its ID is reused. */
+    if (st.request_id && st.request_id != s->pend && st.request_id != s->stop_id) return;
+    int probe = st.request_id && st.request_id == s->probe_id &&
+                st.request_id == s->pend && s->probe_ver == s->seen_ver;
+    if (st.has_status && !st.media_count) {
+        if (!s->mid || s->stopped) return;
+        if (!probe && !(s->stop_id && st.request_id == s->stop_id)) {
+            s->absence = 1; return; /* broadcasts carry no track identity */
+        }
         pthread_mutex_lock(&s->mu);
-        s->snap.player = CS_PL_IDLE;
-        s->snap.idle = CS_IDLE_CANCELLED; /* successful STOP removed the media */
-        s->snap.generation++;
-        remember_media(s);
+        if (s->track_ver == s->seen_ver) {
+            cm_media ended = {0};
+            strcpy(ended.player_state, "IDLE"); strcpy(ended.idle_reason, "CANCELLED");
+            snap_media(s, &ended);
+        }
         pthread_mutex_unlock(&s->mu);
-        stop_end(s, CS_JOB_OK, 0);
+        if (probe) s->pend = s->probe_id = 0;
+        if (s->stop_id) stop_end(s, CS_JOB_OK, 0);
         return;
     }
     for (i = 0; i < st.media_count; i++) {
@@ -523,14 +544,23 @@ static void media_msg(cast_session *s, const char *p)
         if (!(e->present & CM_MEDIA_ID)) continue;
         if (!s->mid && !s->track_load && *s->content && cm_identity(1, 1, &s->owned, e, &s->owned, 0, s->content)) s->mid = e->media_session_id;
         if (!s->mid || e->media_session_id < s->mid) continue;
+        /* A delayed cancellation may carry an old ID/content pair. Confirm before
+         * applying either stop or takeover to this generation. Active unknown media
+         * still takes over below; a probe can also prove a different current identity. */
+        if (!strcmp(e->player_state, "IDLE") &&
+            !strcmp(e->idle_reason, "CANCELLED") && s->seen_ver > 1 && !probe && !s->stop_id) {
+            if (!s->stopped) s->absence = 1;
+            continue;
+        }
         if (!cm_identity(1, 1, &s->owned, e, &s->owned, s->mid, *e->content_id ? s->content : NULL)) { taken(s, NULL); return; }
+        if (s->stopped) continue; /* delayed playing/finished cannot revive a stopped occurrence */
         pthread_mutex_lock(&s->mu);
         if (s->track_ver == s->seen_ver) snap_media(s, e); /* not forgotten meanwhile */
         pthread_mutex_unlock(&s->mu);
         if (s->stop_id && e->media_session_id == s->mid && !strcmp(e->player_state, "IDLE") &&
             (!strcmp(e->idle_reason, "CANCELLED") || !strcmp(e->idle_reason, "FINISHED"))) stop_end(s, CS_JOB_OK, 0); /* our media ended */
         if (s->pend_media && st.request_id && st.request_id == s->pend) {
-            s->pend = 0; pthread_mutex_lock(&s->mu); if(s->command_op) s->snap.confirmed = st.request_id; s->snap.generation++; pthread_mutex_unlock(&s->mu);
+            s->pend = 0; pthread_mutex_lock(&s->mu); if(s->command_op && !s->snap.stopped) s->snap.confirmed = st.request_id; s->snap.generation++; pthread_mutex_unlock(&s->mu);
         }
     }
 }
@@ -549,13 +579,13 @@ static void on_msg(cast_session *s)
             !strcmp(ns, NS_CON) &&
             cm_type(p, strlen(p), type, sizeof type) &&
             !strcmp(type, "CLOSE"))
-            fin(s, CS_LOST, 0, 0);
+            fin(s, CS_LOST, 0, 0, "app transport closed");
         return;
     }
     if (!strcmp(ns, NS_HB) || !strcmp(ns, NS_CON)) {
         if (!cm_type(p, strlen(p), type, sizeof type)) return;
         if (!strcmp(ns, NS_HB)) { if (!strcmp(type, "PING")) s->pong_owed = 1; return; }
-        if (!strcmp(type, "CLOSE")) fin(s, CS_LOST, 0, 1);
+        if (!strcmp(type, "CLOSE")) fin(s, CS_LOST, 0, 1, "receiver closed");
         return;
     }
     if (strcmp(ns, NS_RECV) || !cm_parse(p, strlen(p), s->pend, &st)) return;
@@ -566,7 +596,7 @@ static void on_msg(cast_session *s)
         return;
     }
     if (!strcmp(st.type, "LAUNCH_ERROR")) { /* only the refusal of our own LAUNCH request */
-        if (s->phase == PH_LAUNCH && s->launch_id > 0 && st.request_id == s->launch_id) { s->lst = 3; s->pend = 0; fin(s, CS_FAILED, CS_E_LAUNCH, 1); }
+        if (s->phase == PH_LAUNCH && s->launch_id > 0 && st.request_id == s->launch_id) { s->lst = 3; s->pend = 0; fin(s, CS_FAILED, CS_E_LAUNCH, 1, "launch rejected"); }
         return;
     }
     if (strcmp(st.type, "RECEIVER_STATUS")) return;
@@ -595,7 +625,7 @@ static void on_msg(cast_session *s)
     if (s->phase != PH_STATUS) return;
     if (s->owned_set) { /* reattach: exactly the app/session/transport we own, else it is gone; never LAUNCH */
         for (i = 0; i < st.app_count && !cm_identity(1, 1, &st.apps[i], NULL, &s->owned, 0, NULL); i++);
-        if (i == st.app_count) { s->lst = 3; fin(s, CS_LOST, 0, 1); }
+        if (i == st.app_count) { s->lst = 3; fin(s, CS_LOST, 0, 1, "owned app missing"); }
         else { s->ldl = now_ms() + s->cfg.launch_ms; s->todo |= T_APP; s->phase = PH_APP; }
         return;
     }
@@ -606,7 +636,7 @@ static void on_msg(cast_session *s)
         snprintf(s->snap.busy_app, CM_ID, "%s", a->app_id);
         snprintf(s->snap.busy_name, CM_ID, "%s", *a->display_name ? a->display_name : *a->app_id ? a->app_id : "Another app");
         pthread_mutex_unlock(&s->mu);
-        fin(s, CS_BUSY, 0, 1);
+        fin(s, CS_BUSY, 0, 1, "receiver busy");
     } else s->todo |= T_LAUNCH;
 }
 static void soon(int64_t *u, int64_t v) { if (v < *u) *u = v; }
@@ -614,8 +644,8 @@ static int timers(cast_session *s)
 {
     int64_t t = now_ms();
     if (!s->fin && s->w.tx_len && t >= s->tx_dl) return CS_E_STALL;
-    if (!s->fin && s->phase == PH_STATUS && t >= s->cdl) fin(s, CS_FAILED, RT_TIMEOUT, 1);
-    if (!s->fin && (s->phase == PH_LAUNCH || s->phase == PH_APP) && t >= s->ldl) fin(s, CS_FAILED, CS_E_LAUNCH_TIMEOUT, 1);
+    if (!s->fin && s->phase == PH_STATUS && t >= s->cdl) fin(s, CS_FAILED, RT_TIMEOUT, 1, "status timeout");
+    if (!s->fin && (s->phase == PH_LAUNCH || s->phase == PH_APP) && t >= s->ldl) fin(s, CS_FAILED, CS_E_LAUNCH_TIMEOUT, 1, "launch timeout");
     if (!s->fin && s->phase == PH_READY && s->pend && t >= s->pend_dl) {
         s->pend = 0; op_error(s, RT_TIMEOUT);
     }
@@ -642,7 +672,7 @@ static int run(cast_session *s)
     s->last_rx = now_ms(); /* silence is measured from the end of setup, not from before TCP/TLS */
     for (;;) {
         int ev = POLLIN, again = 0, n, rr = RT_READ;
-        if (flag(&s->cancel) || flag(&s->close_req)) fin(s, CS_CLOSED, flag(&s->cancel) ? RT_CANCEL : 0, 1);
+        if (flag(&s->cancel) || flag(&s->close_req)) fin(s, CS_CLOSED, flag(&s->cancel) ? RT_CANCEL : 0, 1, "cancel or close requested");
         if ((r = timers(s))) return drop(s, r);
         if (s->fin) return finish(s);
         if (!s->fin && !s->w.tx_len) again = next_msg(s); /* no unconditional restart: receive and timers still run */
@@ -659,7 +689,7 @@ static int run(cast_session *s)
                     s->app_tx = 0;
                     s->live_app = 1;
                     if (flag(&s->cancel) || flag(&s->close_req))
-                        fin(s, CS_CLOSED, flag(&s->cancel) ? RT_CANCEL : 0, 1);
+                        fin(s, CS_CLOSED, flag(&s->cancel) ? RT_CANCEL : 0, 1, "cancel or close requested");
                     if ((r = timers(s))) return drop(s, r);
                     if (s->fin) return finish(s);
                     s->phase = PH_READY;
@@ -684,7 +714,7 @@ static int run(cast_session *s)
         if (t - s->last_rx >= s->cfg.dead_ms) return drop(s, CS_E_DEAD);
         until = again ? t : s->last_rx + s->cfg.dead_ms;
         if (s->hb) soon(&until, s->next_ping);
-        if (s->phase == PH_READY && s->mid && !s->pend && !s->ld_id && !s->stop_id && !s->w.tx_len)
+        if (s->phase == PH_READY && s->mid && !s->stopped && !s->pend && !s->ld_id && !s->stop_id && !s->w.tx_len)
             soon(&until, s->next_media_status);
         if (s->w.tx_len) soon(&until, s->tx_dl);
         if (s->phase == PH_STATUS) soon(&until, s->cdl);
@@ -701,6 +731,7 @@ static void *worker(void *p)
         if (r != RT_CANCEL && s->owned_set && tries-- > 0 && !flag(&s->cancel) && !flag(&s->close_req)) {
             publish(s, CS_CONNECTING, r); continue;
         }
+        fprintf(stderr, "Cast session end reason=%s error=%d phase=%d\n", r == RT_CANCEL ? "cancel" : "transport failed", r, s->phase);
         publish(s, r == RT_CANCEL ? CS_CLOSED : CS_FAILED, r);
         break;
     }
@@ -739,7 +770,7 @@ static int enqueue(cast_session *s, cs_op op, double v, int muted)
     int r = RT_ARGUMENT;
     if (!s) return r;
     pthread_mutex_lock(&s->mu); /* only an owned, READY session takes commands; media ops also need the owned media session */
-    if (s->snap.state == CS_READY && s->nops < 4 && (op == CS_OP_STATUS || op == CS_OP_VOLUME || op == CS_OP_VOLUME_STEP || s->snap.media_id)) {
+    if (s->snap.state == CS_READY && s->nops < 4 && (op == CS_OP_STATUS || op == CS_OP_VOLUME || op == CS_OP_VOLUME_STEP || (s->snap.media_id && !s->snap.stopped))) {
         s->ops[s->nops].op = op;
         s->ops[s->nops].v = v;
         s->ops[s->nops].muted = muted;
@@ -769,7 +800,7 @@ int cast_session_track(cast_session *s, const char *id)
     pthread_mutex_lock(&s->mu);
     strcpy(s->want, id); s->want_load = 0; s->track_ver++;
     s->retained.media_id = 0; /* explicit tracking deliberately forgets ownership */
-    s->snap.media_id = s->snap.player = s->snap.idle = 0; s->snap.media_time = 0; s->snap.generation++;
+    s->snap.media_id = s->snap.player = s->snap.idle = s->snap.stopped = s->snap.confirmed = 0; s->snap.media_time = 0; s->snap.generation++;
     pthread_mutex_unlock(&s->mu);
     wake(s);
     return RT_OK;
@@ -790,7 +821,7 @@ int cast_session_load(cast_session *s, const cs_load *r)
         if (s->stop_req) { s->stop_req = 0; s->snap.stop_state = CS_JOB_FAILED; s->snap.stop_error = CS_E_STOP_FAILED; } /* superseded, not confirmed stopped */
         q->start = r->start; s->ld_ver++;
         strcpy(s->want, q->content); s->want_load = 1; s->track_ver++; /* like cast_session_track(): the owned media session is forgotten */
-        s->snap.media_id = s->snap.player = s->snap.idle = 0; s->snap.media_time = 0;
+        s->snap.media_id = s->snap.player = s->snap.idle = s->snap.stopped = s->snap.confirmed = 0; s->snap.media_time = 0;
         s->snap.load_state = CS_JOB_PENDING; s->snap.load_error = 0; s->snap.load_seq++; s->snap.generation++;
         rc = RT_OK;
     }

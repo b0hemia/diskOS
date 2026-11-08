@@ -1,6 +1,8 @@
+#include "indic.h"
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "rowpool.h"
 #include "theme.h"
 #include "theme_kit.h"
 #include "sdio.h"
@@ -70,8 +72,7 @@ static int         g_nent;
 static int         g_opened;
 static lv_obj_t   *g_list;
 static lv_obj_t   *g_title;
-static lv_timer_t *g_fb_fill;              /* incremental row builder (avoids a long open stall) */
-static int         g_fb_i;                 /* next entry index to render */
+static row_pool_t g_rows;
 
 /* audio files diskOS can play - mirror scanner.c is_audio() exactly. */
 static int fb_has_ext(const char *name, const char *ext){
@@ -97,7 +98,7 @@ static int fb_cmp(const void *a, const void *b){
     return strcasecmp(x->name, y->name);
 }
 
-static void fb_fill_stop(void){ if(g_fb_fill){ lv_timer_del(g_fb_fill); g_fb_fill = NULL; } }
+static void fb_fill_stop(void){ row_pool_clear(&g_rows); }
 
 /* Single worker, latest request wins; the UI timer owns all widgets. */
 typedef struct {
@@ -246,6 +247,7 @@ static void fb_poll_cb(lv_timer_t *t){
         fb_fill_stop();
         /* hidden: just drop the scan; visible: show the error once */
         if(visible && !g_fb_error_shown){
+            fb_fill_stop();
             free(g_ent); g_ent = NULL; g_nent = 0; g_opened = 0;
             fb_rebuild(); g_fb_error_shown = 1;
         }
@@ -267,6 +269,7 @@ static void fb_poll_cb(lv_timer_t *t){
         lv_timer_set_period(t, 200);
         return;
     }
+    fb_fill_stop();
     free(g_ent); g_ent = res.ent; g_nent = res.nent; g_opened = res.opened;
     fb_rebuild();
     lv_timer_del(t); g_fb_poll = NULL;
@@ -316,53 +319,33 @@ static void fb_empty_label(const char *msg){
 
 static void fb_row_cb(lv_event_t *e);
 
-static void fb_add_row(int i){
-        fb_entry_t *en = &g_ent[i];
-        lv_obj_t *r = lv_button_create(g_list);
-        lv_obj_remove_style_all(r);
-        lv_obj_set_size(r, 268, 46);
-        lv_obj_set_style_radius(r, 8, 0);
-        lv_obj_set_style_bg_color(r, TC(LIST_PRESSED), LV_STATE_PRESSED);
-        lv_obj_set_style_bg_opa(r, LV_OPA_70, LV_STATE_PRESSED);
-        lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_ext_click_area(r, 2);
-        ui_on(r, fb_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i, "folderbrowser.fb_row", UI_CORE);
-        kit_row_layout(r, KIT_ROW_ICON);
-
-        lv_obj_t *ic = lv_label_create(r);
-        lv_label_set_text(ic, en->is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_AUDIO);
-        lv_obj_set_pos(ic, 10, 14);
-        lv_obj_set_style_text_font(ic, TF(UI_16), 0);
-        lv_obj_set_style_text_color(ic, en->is_dir ? TC(FOLDER_ICON) : TC(TEXT_MUTED), 0);
-
-        lv_obj_t *nm = lv_label_create(r);
-        lv_label_set_text(nm, en->name);
-        lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
-        lv_obj_set_pos(nm, 40, 14);
-        lv_obj_set_size(nm, en->is_dir ? 194 : 216, 20);
-        lv_obj_set_style_text_font(nm, TF(USER_16), 0);   /* CJK filenames, like Library/Search */
-        lv_obj_set_style_text_color(nm, TC(TEXT_PRIMARY), 0);
-
-        if(en->is_dir){
-            lv_obj_t *ch = lv_label_create(r);
-            lv_label_set_text(ch, LV_SYMBOL_RIGHT);
-            lv_obj_set_pos(ch, 244, 15);
-            lv_obj_set_style_text_font(ch, TF(UI_16), 0);
-            lv_obj_set_style_text_color(ch, TC(TEXT_DISABLED), 0);
-        }
-        theme_list_row(r);
-}
-
-static void fb_fill_cb(lv_timer_t *t){
-    (void)t;
-    if(screen_current() != SCR_FOLDER) return;
-    uint32_t start = lv_tick_get();
-    int end = g_fb_i + 40; if(end > g_nent) end = g_nent;   /* render in batches so scrolling stays responsive */
-    while(g_fb_i < end){
-        fb_add_row(g_fb_i++);
-        if(lv_tick_elaps(start) >= 4) break;
+static void fb_bind(row_slot_t *s, int fresh){
+    fb_entry_t *en=&g_ent[s->index];
+    if(fresh){
+        s->row=lv_button_create(g_list);
+        lv_obj_clear_flag(s->row,LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_ext_click_area(s->row,2);
+        ui_on(s->row,fb_row_cb,LV_EVENT_CLICKED,s,"folderbrowser.fb_row",UI_CORE);
+        for(int j=0;j<3;j++) s->label[j]=j==1?indic_label_create(s->row):lv_label_create(s->row);
     }
-    if(g_fb_i >= g_nent) fb_fill_stop();
+    row_slot_reset(s);
+    lv_obj_t *r=s->row,*ic=s->label[0],*nm=s->label[1],*ch=s->label[2];
+    lv_obj_set_size(r,268,46); lv_obj_set_style_radius(r,8,0);
+    lv_obj_set_style_bg_color(r,TC(LIST_PRESSED),LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(r,LV_OPA_70,LV_STATE_PRESSED);
+    kit_row_layout(r,KIT_ROW_ICON);
+    lv_label_set_text(ic,en->is_dir?LV_SYMBOL_DIRECTORY:LV_SYMBOL_AUDIO);
+    lv_obj_set_pos(ic,10,14); lv_obj_set_style_text_font(ic,TF(UI_16),0);
+    lv_obj_set_style_text_color(ic,en->is_dir?TC(FOLDER_ICON):TC(TEXT_MUTED),0);
+    lv_label_set_text(nm,en->name); lv_label_set_long_mode(nm,LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(nm,40,14); lv_obj_set_size(nm,en->is_dir?194:216,20);
+    lv_obj_set_style_text_font(nm,TF(USER_16),0); lv_obj_set_style_text_color(nm,TC(TEXT_PRIMARY),0);
+    lv_label_set_text(ch,en->is_dir?LV_SYMBOL_RIGHT:"");
+    lv_obj_set_pos(ch,244,15); lv_obj_set_style_text_font(ch,TF(UI_16),0);
+    lv_obj_set_style_text_color(ch,TC(TEXT_DISABLED),0);
+    if(!en->is_dir) lv_obj_add_flag(ch,LV_OBJ_FLAG_HIDDEN);
+    indic_row_fit(r,nm,NULL);
+    theme_list_row(r);
 }
 
 static void fb_rebuild(void){
@@ -384,13 +367,8 @@ static void fb_rebuild(void){
         return;
     }
 
-    /* Render the first screenful synchronously, then the rest on a timer so a folder with
-     * thousands of files doesn't stall the UI on open (mirrors the Library song list). */
-    g_fb_i = 0;
-    int first = g_nent < 20 ? g_nent : 20;
-    for(; g_fb_i < first; g_fb_i++) fb_add_row(g_fb_i);
-    if(g_fb_i < g_nent) g_fb_fill = lv_timer_create(fb_fill_cb, 16, NULL);
-    lv_obj_scroll_to_y(g_list, 0, LV_ANIM_OFF);
+    lv_obj_scroll_to_y(g_list,0,LV_ANIM_OFF);
+    if(!row_pool_start(&g_rows,g_list,g_nent,46,6,0,11,0,0,1,fb_bind)) ui_toast("Out of memory");
 }
 
 static void fb_descend(const char *name){
@@ -466,7 +444,7 @@ static void fb_play_iso(const char *name){
 
 static void fb_row_cb(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    int i = row_slot_index(lv_event_get_user_data(e));
     if(i < 0 || i >= g_nent) return;
     fb_entry_t *en = &g_ent[i];
     if(en->is_dir) fb_descend(en->name);

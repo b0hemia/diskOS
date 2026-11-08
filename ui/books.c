@@ -1,3 +1,4 @@
+#include "indic.h"
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 /* Books screen: list audiobooks (.m4b) with saved progress; tap a book to play and resume where
@@ -153,7 +154,7 @@ static void books_rebuild_read(void){
 
         books_add_cover(r, b, i);                               /* 42px cover / glyph on the left */
 
-        lv_obj_t *t = lv_label_create(r);                       /* title (book names may be non-Latin) */
+        lv_obj_t *t = indic_label_create(r);                       /* title (book names may be non-Latin) */
         lv_label_set_text(t, b->title[0] ? b->title : "Untitled");
         lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
         lv_obj_set_pos(t, 64, 8); lv_obj_set_size(t, 190, 20);
@@ -164,12 +165,13 @@ static void books_rebuild_read(void){
         char sub[224];
         if(b->author[0]) snprintf(sub, sizeof sub, "%s - %s", b->author, prog);
         else             snprintf(sub, sizeof sub, "%s", prog);
-        lv_obj_t *s = lv_label_create(r);                       /* author - progress */
+        lv_obj_t *s = indic_label_create(r);                       /* author - progress */
         lv_label_set_text(s, sub);
         lv_label_set_long_mode(s, LV_LABEL_LONG_DOT);
         lv_obj_set_pos(s, 64, 32); lv_obj_set_size(s, 190, 18);
         lv_obj_set_style_text_font(s, TF(USER_14), 0);
         lv_obj_set_style_text_color(s, TC(TEXT_MUTED), 0);
+        indic_row_fit(r,t,s);
     }
     lv_obj_scroll_to_y(g_list, 0, LV_ANIM_OFF);
 }
@@ -255,9 +257,26 @@ void chapters_update(const track_state_t *current){
     const bookmeta_snapshot *m = ui_bookmeta_snapshot(&st);
     uint64_t request = m ? m->request_generation : 0;
     bookmeta_state state = m ? m->state : BOOKMETA_NONE;
+    static int shown_chapter = -1;
+    static long shown_duration = -1;
+    int cur = 0;
+    if(m && state == BOOKMETA_COMPLETE && m->result.chapters == BOOK_META_OK){
+        for(int i = 0; i < m->result.count; i++){
+            if(m->chapters[i].start_ms <= st.position_ms) cur = i;
+            else break;
+        }
+    }
+    int same_book = !strcmp(g_chlist_path, st.path) &&
+        g_chlist_token == st.playback_token && g_chlist_player == st.player_generation;
+    int keep_scroll = same_book && shown_chapter == cur &&   /* not on a forced reopen or placeholder -> content */
+        g_chlist_state == BOOKMETA_COMPLETE && state == BOOKMETA_COMPLETE &&
+        g_chlist_request == request && g_chlist_n > 0;
+    int32_t scroll_y = lv_obj_get_scroll_y(g_chap_list);
     if(!strcmp(g_chlist_path, st.path) && g_chlist_token == st.playback_token &&
        g_chlist_player == st.player_generation && g_chlist_request == request &&
-       g_chlist_state == state) return;
+       g_chlist_state == state && shown_chapter == cur &&
+       shown_duration == st.duration_ms) return;
+    shown_chapter = cur; shown_duration = st.duration_ms;
     lv_obj_clean(g_chap_list);
     g_chlist_n = 0;
     snprintf(g_chlist_path, sizeof g_chlist_path, "%s", st.path);
@@ -273,8 +292,6 @@ void chapters_update(const track_state_t *current){
     if(g_chlist_n <= 0){ chap_empty("This book has no chapters"); return; }
     memcpy(g_chlist, m->chapters, g_chlist_n * sizeof g_chlist[0]);
     long dur = st.duration_ms;
-    int cur = 0;
-    for(int i = 0; i < g_chlist_n; i++){ if(g_chlist[i].start_ms <= st.position_ms) cur = i; else break; }
     lv_obj_t *cur_row = NULL;
     for(int i = 0; i < g_chlist_n; i++){
         long endms = (i + 1 < g_chlist_n) ? g_chlist[i+1].start_ms : (dur > 0 ? dur : g_chlist[i].start_ms);
@@ -297,7 +314,7 @@ void chapters_update(const track_state_t *current){
         lv_obj_set_style_text_font(num, TF(UI_14), 0);
         lv_obj_set_style_text_color(num, (i == cur ? TC(STATUS_INFO) : TC(TEXT_MUTED)), 0);
 
-        lv_obj_t *t = lv_label_create(r);                       /* chapter title (may be non-Latin) */
+        lv_obj_t *t = indic_label_create(r);                       /* chapter title (may be non-Latin) */
         lv_label_set_text(t, g_chlist[i].title);
         lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
         lv_obj_set_pos(t, 50, 16); lv_obj_set_size(t, 148, 20);
@@ -311,9 +328,11 @@ void chapters_update(const track_state_t *current){
         lv_obj_set_style_text_font(d, TF(UI_12), 0);
         lv_obj_set_style_text_color(d, TC(TEXT_MUTED), 0);
 
+        indic_row_fit(r,t,NULL);
         if(i == cur) cur_row = r;
     }
-    if(cur_row) lv_obj_scroll_to_view(cur_row, LV_ANIM_OFF);    /* open centred on the current chapter */
+    if(keep_scroll) lv_obj_scroll_to_y(g_chap_list, scroll_y, LV_ANIM_OFF);
+    else if(cur_row) lv_obj_scroll_to_view(cur_row, LV_ANIM_OFF);    /* open centred on the current chapter */
 }
 
 void chapters_create(lv_obj_t *root){

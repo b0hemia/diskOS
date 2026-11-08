@@ -12,9 +12,10 @@ void sd_io_hold(void);
 unsigned sd_io_active(void);
 int sd_io_resume(void);
 int sd_io_allowed(void);
-/* Generation shares the admission lock. Invalidate on wake before using caches.
+/* Generation shares the admission lock. Invalidate when cached sources change.
  * Observe mount identity only off-thread; no card handles are opened here. */
 uint64_t sd_io_generation(void);
+uint64_t sd_io_media_generation(void);
 void sd_io_invalidate(void);
 void sd_io_check_media(void);
 /* An unaccounted decoder keeps ownership uncertain across UI restarts. */

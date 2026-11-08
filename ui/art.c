@@ -29,25 +29,54 @@ static int64_t art_now_ms(void){ struct timespec t; clock_gettime(CLOCK_MONOTONI
  * BMPs. It replaced the stock `ffmpeg` command, which stock V2.57 ships without any image decoders. It runs as a
  * separate process (no shell): a hostile file can only kill the helper, and the kill/timeout/cancel logic below
  * applies unchanged. See tools/diskos_artdec.c for its limits and exit statuses. */
+#ifndef ARTDEC_PATH
 #define ARTDEC_PATH "/opt/diskos/bin/diskos-artdec"
+#endif
 /* The exact artwork layout the readers (LVGL BMP decoder, cover/accent/Album Wall readers) assume: 14-byte file
  * header + 40-byte BITMAPINFOHEADER, pixel offset 54, n x n (positive height = bottom-up), 1 plane, 24 bpp,
  * BI_RGB, rows padded to 4 bytes, and a file of exactly that length. Every field is checked in full. Used for
  * fresh helper output AND for cache hits. */
 static uint32_t le32_(const unsigned char *p){ return (uint32_t)p[0] | (uint32_t)p[1]<<8 | (uint32_t)p[2]<<16 | (uint32_t)p[3]<<24; }
-int art_bmp_valid(const char *path, int n){
-    uint32_t stride = ((uint32_t)n * 3 + 3) & ~3u, dsz = stride * (uint32_t)n, want = 54 + dsz;
+int art_bmp_check(const char *path, int n){
+    uint32_t stride = ((uint32_t)n * 3 + 3) & ~3u;
+    uint32_t dsz = stride * (uint32_t)n, want = 54 + dsz;
     unsigned char h[54];
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
-    if(fd < 0) return 0;
+    int fd;
+    do fd = open(path, O_RDONLY | O_CLOEXEC);
+    while(fd < 0 && errno == EINTR);
+    if(fd < 0) return -1;
+
     struct stat st;
-    int ok = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && (uint64_t)st.st_size == want && read(fd, h, 54) == 54 &&
-             h[0] == 'B' && h[1] == 'M' && le32_(h + 2) == want && le32_(h + 6) == 0 && le32_(h + 10) == 54 &&
-             le32_(h + 14) == 40 && le32_(h + 18) == (uint32_t)n && le32_(h + 22) == (uint32_t)n &&
-             (h[26] | h[27] << 8) == 1 && (h[28] | h[29] << 8) == 24 && le32_(h + 30) == 0 &&
-             (le32_(h + 34) == dsz || le32_(h + 34) == 0);
-    close(fd);
+    int ok = -1;
+    if(fstat(fd, &st) == 0){
+        if(!S_ISREG(st.st_mode) || (uint64_t)st.st_size != want){
+            ok = 0;
+        }else{
+            size_t off = 0;
+            while(off < sizeof h){
+                ssize_t got = read(fd, h + off, sizeof h - off);
+                if(got < 0 && errno == EINTR) continue;
+                if(got <= 0) break;
+                off += (size_t)got;
+            }
+            if(off == sizeof h){
+                ok = h[0] == 'B' && h[1] == 'M' &&
+                     le32_(h + 2) == want && le32_(h + 6) == 0 &&
+                     le32_(h + 10) == 54 && le32_(h + 14) == 40 &&
+                     le32_(h + 18) == (uint32_t)n &&
+                     le32_(h + 22) == (uint32_t)n &&
+                     (h[26] | h[27] << 8) == 1 &&
+                     (h[28] | h[29] << 8) == 24 &&
+                     le32_(h + 30) == 0 &&
+                     (le32_(h + 34) == dsz || le32_(h + 34) == 0);
+            }
+        }
+    }
+    if(close(fd)) return -1;
     return ok;
+}
+int art_bmp_valid(const char *path, int n){
+    return art_bmp_check(path, n) == 1;
 }
 /* In the CHILD, after fork: close every descriptor >= 3. Lists /proc/self/fd with raw openat/getdents64 (no malloc,
  * no stdio: safe after fork in a threaded process), so no descriptor escapes, however high. Returns 0 only if
@@ -85,6 +114,8 @@ static int art_child_close_fds(int fallback_max, int fallback_complete){
  * are never registered, so cancelling a skip only targets the on-screen track. */
 static pthread_mutex_t g_pid_mu = PTHREAD_MUTEX_INITIALIZER;
 static volatile pid_t  g_live_pid = 0;
+static pid_t g_spec_pid;
+static unsigned g_spec_gen;
 /* EVERY decoder child is also recorded here, cancellable or not. art_cancel() deliberately targets only
  * the on-screen track, but losing SD access is different: when the card must be released, a prewarm or
  * fallback decode holding it open has to go too. Small fixed array - the decoders are serialised by
@@ -101,6 +132,7 @@ static void art_child_add(pid_t p){            /* caller holds g_pid_mu; a slot 
 static void art_child_del_locked(pid_t p){     /* caller holds g_pid_mu */
     for(int i = 0; i < ART_MAX_CHILDREN; i++) if(g_all_pids[i] == p){ g_all_pids[i] = 0; break; }
     if(g_live_pid == p) g_live_pid = 0;
+    if(g_spec_pid == p) g_spec_pid = 0;
 }
 /* Collect artwork children that outlived their request (still registered after the bounded reap). Decodes are
  * serialised by the callers' decode lock, so at the start of a new attempt every registered child is such a
@@ -138,6 +170,21 @@ void art_cancel(void){
     if(p > 0) kill(-p, SIGKILL);
     pthread_mutex_unlock(&g_pid_mu);
 }
+/* Demand cancels speculative work without changing the foreground request token. */
+unsigned art_spec_gen(void){
+    pthread_mutex_lock(&g_pid_mu); unsigned g=g_spec_gen; pthread_mutex_unlock(&g_pid_mu); return g;
+}
+void art_spec_cancel(void){
+    pthread_mutex_lock(&g_pid_mu);
+    g_spec_gen++;
+    if(g_spec_pid > 0) kill(-g_spec_pid, SIGKILL);
+    pthread_mutex_unlock(&g_pid_mu);
+}
+int art_request_current(int owner, unsigned gen){
+    pthread_mutex_lock(&g_pid_mu);
+    int ok = owner >= 2 ? gen == g_spec_gen : !owner || gen == g_cancel_gen;
+    pthread_mutex_unlock(&g_pid_mu); return ok;
+}
 /* Kill EVERY decoder child, including the deliberately non-cancellable prewarm and fallback ones. Used
  * when SD access is revoked: a decoder still reading the card is exactly what must not outlive that. */
 void art_kill_all(void){
@@ -160,6 +207,9 @@ void art_kill_all(void){
  * 5 malformed, 6 over a limit, 7 I/O), or -1 when it was killed, cancelled, timed out or never started. Lets a caller
  * tell "this picture cannot be decoded" from "this attempt was interrupted" - the return value can't. */
 static __thread int t_art_exit = -1;
+static __thread art_resolution *t_resolution;
+static __thread const art_picture_id *t_known;
+static __thread const art_picture_id *t_saver_picture;
 int art_last_exit(void){ return t_art_exit; }
 static int art_run_helper(const char *input, const char *saver_raw, const char *cover_bmp,
                     const char *thumb_bmp, const char *backdrop_bmp, int cancellable, unsigned gen0,
@@ -169,15 +219,30 @@ static int art_run_helper(const char *input, const char *saver_raw, const char *
     /* A fresh directory per attempt, on the same filesystem as the outputs: the helper creates its three files
      * inside it exclusively, and only a complete, validated set is renamed into place. Leftovers from a killed
      * or failed attempt can never be mistaken for a result. */
-    char stage[64]; snprintf(stage, sizeof stage, "/tmp/.diskos-artdec-XXXXXX");
+#ifndef ART_TMP_ROOT
+#define ART_TMP_ROOT "/tmp"
+#endif
+    char stage[sizeof(ART_TMP_ROOT) + 32];
+    snprintf(stage, sizeof stage, "%s/.diskos-artdec-XXXXXX", ART_TMP_ROOT);
     if(!mkdtemp(stage)) return -1;
-    char sc[96], st_[96], sb[96], sv[96];
+    char sc[sizeof stage+16], st_[sizeof stage+16], sb[sizeof stage+16], sv[sizeof stage+16], si[sizeof stage+16], sk[sizeof stage+16];
     snprintf(sc, sizeof sc, "%s/c.bmp", stage); snprintf(st_, sizeof st_, "%s/t.bmp", stage); snprintf(sb, sizeof sb, "%s/b.bmp", stage);
     snprintf(sv, sizeof sv, "%s/v.bgra", stage);
+    snprintf(si, sizeof si, "%s/identity", stage); snprintf(sk, sizeof sk, "%s/known", stage);
+    const art_picture_id *known = saver_raw ? t_saver_picture : t_known;
+    if(known && known->length){
+        FILE *kf = fopen(sk, "wb");
+        if(!kf){ rmdir(stage); return -1; }
+        int ok = fwrite(known, 1, sizeof *known, kf) == sizeof *known;
+        if(fclose(kf)) ok = 0;
+        if(!ok){ unlink(sk); rmdir(stage); return -1; }
+    }
     /* everything the child needs is prepared before fork: after fork it only calls async-signal-safe functions */
     char *argv_art[] = { "diskos-artdec", "art", (char *)input, stage, NULL };
-    char *argv_sav[] = { "diskos-artdec", "saver", (char *)input, sv, NULL };
-    char **argv = saver_raw ? argv_sav : argv_art;
+    char *argv_sav[] = { "diskos-artdec", "saver", (char *)input, sv, known && known->length ? sk : NULL, NULL };
+    char *argv_res[] = { "diskos-artdec", "resolve", (char *)input, stage,
+                         t_known && t_known->length ? sk : NULL, NULL };
+    char **argv = saver_raw ? argv_sav : t_resolution ? argv_res : argv_art;
     /* fallback for when /proc is unreadable: close 3..limit, which is complete only if limit covers every fd */
     struct rlimit nof; int have_lim = getrlimit(RLIMIT_NOFILE, &nof) == 0;
     int maxfd = (have_lim && nof.rlim_cur <= 65536) ? (int)nof.rlim_cur : 65536;
@@ -189,7 +254,7 @@ static int art_run_helper(const char *input, const char *saver_raw, const char *
      * Both parent and child call setpgid so the group exists before we unlock. */
     pthread_mutex_lock(&g_pid_mu);
     int ret = -1;
-    if(cancellable && g_cancel_gen != gen0){ pthread_mutex_unlock(&g_pid_mu); ret = -2; goto cleanup; }  /* superseded - don't start */
+    if((cancellable == 1 && g_cancel_gen != gen0) || (cancellable >= 2 && g_spec_gen != gen0)){ pthread_mutex_unlock(&g_pid_mu); ret = -2; goto cleanup; }  /* superseded - don't start */
     if(t_kill_armed && g_kill_gen != t_kill0){ pthread_mutex_unlock(&g_pid_mu); ret = -2; goto cleanup; }  /* SD revoked - don't start */
     if(!art_child_slot_free()){ pthread_mutex_unlock(&g_pid_mu); goto cleanup; }
     pid_t pid = fork();
@@ -201,7 +266,8 @@ static int art_run_helper(const char *input, const char *saver_raw, const char *
         _exit(127);                          /* exec failed */
     }
     setpgid(pid, pid);                       /* parent side of the race; ignore EACCES/ESRCH */
-    if(cancellable) g_live_pid = pid;
+    if(cancellable == 1) g_live_pid = pid;
+    if(cancellable >= 2) g_spec_pid = pid;
     art_child_add(pid);
     pthread_mutex_unlock(&g_pid_mu);
     /* BOUNDED wait against a SHARED absolute monotonic deadline (art_now_ms), so the whole decode request
@@ -244,26 +310,45 @@ static int art_run_helper(const char *input, const char *saver_raw, const char *
     }
     if(killed) goto cleanup;                                       /* waitpid failed / killed on timeout */
     if(WIFEXITED(status)) t_art_exit = WEXITSTATUS(status);        /* killed by a signal (cancel): stays -1 */
-    if(!WIFEXITED(status) || WEXITSTATUS(status) != 0) goto cleanup;   /* killed, no picture, or bad input */
+    int reused = t_resolution && t_art_exit == ART_ID_REUSED;
+    if(!WIFEXITED(status) || (WEXITSTATUS(status) != 0 && !reused)) goto cleanup;   /* killed, no picture, or bad input */
     /* publish only a complete set with the exact expected layout, and only if this request is still current */
-    if(saver_raw){
+    art_identity_wire wire = {0};
+    if(t_resolution){
+        FILE *f = fopen(si, "rb");
+        if(!f) goto cleanup;
+        int ok = fread(&wire, 1, sizeof wire, f) == sizeof wire && fgetc(f) == EOF;
+        fclose(f);
+        if(!ok || wire.magic != ART_ID_MAGIC || wire.version != ART_ID_VERSION || wire.reserved || wire.candidate >= 16 ||
+           !wire.picture.length || wire.picture.length > (8u << 20) ||
+           (reused && (!t_known || !art_picture_equal(&wire.picture, t_known)))) goto cleanup;
+    }
+    if(reused) { /* identity only: the current owner already has these pixels */ }
+    else if(saver_raw){
         struct stat vs;
         if(stat(sv, &vs) != 0 || !S_ISREG(vs.st_mode) || vs.st_size != 360 * 360 * 4) goto cleanup;
     } else if(!art_bmp_valid(sc, 148) || !art_bmp_valid(st_, 42) || !art_bmp_valid(sb, 360)) goto cleanup;
     /* The final "still wanted?" check and the renames happen under g_pid_mu, the lock every cancellation and
      * revocation takes: no cancel can land between the check and the publish. (Renames are within tmpfs.) */
     pthread_mutex_lock(&g_pid_mu);
-    if((cancellable && g_cancel_gen != gen0) || (t_kill_armed && g_kill_gen != t_kill0)) ret = -2;
+    if(((cancellable == 1 && g_cancel_gen != gen0) || (cancellable >= 2 && g_spec_gen != gen0)) || (t_kill_armed && g_kill_gen != t_kill0)) ret = -2;
     else if(art_now_ms() >= deadline_ms) ret = -1;          /* finished past the request deadline: not used */
+    else if(reused) ret = ART_ID_REUSED;
     else if(saver_raw) ret = rename(sv, saver_raw) == 0 ? 0 : -1;
     else if(rename(sc, cover_bmp) != 0) ret = -1;
     /* all or nothing: a later rename failing takes back the earlier ones */
     else if(rename(st_, thumb_bmp) != 0){ unlink(cover_bmp); ret = -1; }
     else if(rename(sb, backdrop_bmp) != 0){ unlink(cover_bmp); unlink(thumb_bmp); ret = -1; }
     else ret = 0;
+    if(t_resolution && (ret == 0 || ret == ART_ID_REUSED)){
+        t_resolution->picture = wire.picture; t_resolution->candidate = wire.candidate;
+        snprintf(t_resolution->source, sizeof t_resolution->source, "%s", input);
+        t_resolution->state = ART_PRESENT;
+    }
     pthread_mutex_unlock(&g_pid_mu);
 cleanup:
-    unlink(sc); unlink(st_); unlink(sb); unlink(sv);               /* whatever is left of this attempt */
+    if(!art_request_current(cancellable,gen0)) ret=-2;
+    unlink(si); unlink(sk); unlink(sc); unlink(st_); unlink(sb); unlink(sv);               /* whatever is left of this attempt */
     rmdir(stage);
     return ret;
 }
@@ -299,6 +384,25 @@ void art_sidecar_signature(const char *track, uint64_t *h){
     }
 }
 
+int art_source_signature(const char *track, uint64_t *h){
+    const char *slash = strrchr(track, '/');
+    size_t dlen = slash ? (size_t)(slash-track) : 0;
+    for(unsigned i=0;i<=ART_COVER_N;i++){
+        char path[1024]; struct stat st;
+        if(!i) snprintf(path, sizeof path, "%s", track);
+        else {
+            if(!dlen || dlen > 900) continue;
+            snprintf(path, sizeof path, "%.*s/%s", (int)dlen, track, ART_COVER_NAMES[i-1]);
+        }
+        if(stat(path, &st)){ if(i && errno == ENOENT) continue; return -1; }
+        if(!S_ISREG(st.st_mode)) continue;
+        uint64_t v[6] = { i+1u, (uint64_t)st.st_size, (uint64_t)st.st_mtime,
+                         (uint64_t)st.st_ctime, (uint64_t)st.st_mtim.tv_nsec, (uint64_t)st.st_ctim.tv_nsec };
+        for(int k=0;k<6;k++) for(int b=0;b<8;b++){ *h ^= (v[k]>>(b*8))&255; *h *= 1099511628211ULL; }
+    }
+    return 0;
+}
+
 /* Render cover/thumb/backdrop for a track. Prefer the track's EMBEDDED art (stock precedence); if
  * there is none, fall back to a sibling cover file in the track's folder so albums that keep their
  * art as cover.jpg/folder.jpg still show artwork instead of the no-art placeholder. A cancellable
@@ -326,27 +430,31 @@ static int art_make_all_ex_gen_leased(const char *track, const char *cover_bmp,
     else { pthread_mutex_lock(&g_pid_mu); t_kill0 = g_kill_gen; pthread_mutex_unlock(&g_pid_mu); }
     t_kill_armed = 1;
     int r = art_run_pipeline(track, cover_bmp, thumb_bmp, backdrop_bmp, cancellable, gen0, deadline);
-    if(r == 0){ t_kill_armed = 0; return 0; }     /* embedded art */
-    if(r == -2){ t_kill_armed = 0; return -1; }   /* superseded or revoked - stop */
+    if(r == 0 || r == ART_ID_REUSED){ t_kill_armed = 0; return r; }     /* embedded art */
+    if(r == -2 || t_art_exit == 7 || t_art_exit == -1){ t_kill_armed = 0; return r; }   /* superseded or revoked - stop */
 
+    int absent = t_art_exit == 3;
     const char *slash = strrchr(track, '/');       /* else try a sibling cover file */
     if(!slash){ t_kill_armed = 0; return -1; }
     size_t dlen = (size_t)(slash - track);
     if(dlen == 0 || dlen > 900){ t_kill_armed = 0; return -1; }
     for(unsigned i=0; i<sizeof ART_COVER_NAMES/sizeof ART_COVER_NAMES[0]; i++){
-        if(art_now_ms() >= deadline) break;        /* request deadline spent -> stop trying */
+        if(art_now_ms() >= deadline){ absent = 0; break; }
         unsigned kg; pthread_mutex_lock(&g_pid_mu); kg = g_kill_gen; pthread_mutex_unlock(&g_pid_mu);
-        if(kg != t_kill0) break;                   /* SD revoked since this request began - stop probing */
+        if(kg != t_kill0){ absent = 0; break; }                   /* SD revoked since this request began - stop probing */
         char cov[1024];
         int n = snprintf(cov, sizeof cov, "%.*s/%s", (int)dlen, track, ART_COVER_NAMES[i]);
         if(n <= 0 || n >= (int)sizeof cov) continue;
-        if(access(cov, R_OK) != 0) continue;       /* not present */
+        if(access(cov, R_OK) != 0){ if(errno != ENOENT) absent = 0; continue; }
         r = art_run_pipeline(cov, cover_bmp, thumb_bmp, backdrop_bmp, cancellable, gen0, deadline);
-        if(r == 0)  break;                          /* rendered from the external cover */
-        if(r == -2) break;                          /* superseded or revoked between attempts - stop */
+        if(t_art_exit != 3) absent = 0;
+        if(r == 0 || r == ART_ID_REUSED) break;                          /* rendered from the external cover */
+        if(r == -2 || t_art_exit == 7 || t_art_exit == -1) break;                          /* superseded or revoked between attempts - stop */
     }
     t_kill_armed = 0;
-    return r == 0 ? 0 : -1;
+    if(t_resolution && r != 0 && r != ART_ID_REUSED)
+        t_resolution->state = absent && r != -2 && t_art_exit == 3 ? ART_ABSENT : ART_FAILED;
+    return r == 0 || r == ART_ID_REUSED || r == -2 ? r : -1;
 }
 
 /* The vinyl screensaver's sharp 360x360 cover for `track`, written to out_raw as top-down BGRA. Same rules as the
@@ -387,7 +495,7 @@ int art_make_saver(const char *track, const char *out_raw, int64_t deadline_ms){
 int art_make_all_ex(const char *track, const char *cover_bmp,
                     const char *thumb_bmp, const char *backdrop_bmp, int cancellable){
     unsigned gen0;
-    pthread_mutex_lock(&g_pid_mu); gen0 = g_cancel_gen; pthread_mutex_unlock(&g_pid_mu);
+    pthread_mutex_lock(&g_pid_mu); gen0 = cancellable>=2 ? g_spec_gen : g_cancel_gen; pthread_mutex_unlock(&g_pid_mu);
     return art_make_all_ex_gen(track, cover_bmp, thumb_bmp, backdrop_bmp, cancellable, gen0);
 }
 
@@ -455,5 +563,23 @@ done:
     if(src>=0) close(src);
     if(dst>=0) close(dst);
     unlink(temp);
+    return rc;
+}
+
+/* Reuses exactly the existing parser/selection and killable-child lifecycle. */
+int art_resolve(const char *track, const char *cover, const char *thumb, const char *bg,
+                int cancellable, unsigned gen, const art_picture_id *known, art_resolution *result){
+    memset(result, 0, sizeof *result); result->state = ART_FAILED;
+    t_resolution = result; t_known = known;
+    int rc = art_make_all_ex_gen(track, cover, thumb, bg, cancellable, gen);
+    t_resolution = NULL; t_known = NULL;
+    return rc;
+}
+
+int art_make_saver_checked(const char *track, const char *out_raw, int64_t deadline_ms, const art_picture_id *expected){
+    if(!expected || !expected->length) return -1;
+    t_saver_picture = expected;
+    int rc = art_make_saver(track, out_raw, deadline_ms);
+    t_saver_picture = NULL;
     return rc;
 }

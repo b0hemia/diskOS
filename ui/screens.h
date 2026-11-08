@@ -22,6 +22,7 @@ int  screen_anim_on(void);   /* the Animations setting as the screen manager app
 void screen_set_anim(int on);
 int  screen_current(void);
 void ui_toast(const char *msg);
+void ui_clock_text_ago(uint64_t age_ms, char *out, int cap);   /* time of day age_ms ago, clock format */
 void splash_start(void);
 /* the "something" block-matrix clock (home.c): handle 0 = Home, 1 = screensaver */
 int  mclock_new(int h, lv_obj_t *parent, int y);
@@ -167,6 +168,7 @@ void library_open_album(const char *name);
 void library_open_artist(const char *name);
 void albumwall_create(lv_obj_t *root);     /* SCR_ALBUMWALL: cover-flow album browser */
 void albumwall_refresh(void);              /* rebuilt per entry from the album list */
+void albumwall_wake(void);
 void albumwall_prewarm_seed(void);         /* MAIN thread: (re)start the incremental album-cover prewarm enqueue */
 void albumwall_step(int dir);              /* +1 next / -1 prev album (discrete: keys / demo) */
 void albumwall_drag_begin(int px);         /* finger down: start a continuous drag from press x */
@@ -209,7 +211,8 @@ void saver_dark(void);         /* the panel went dark: same, and nothing Custom 
 void saver_wake(void);         /* the panel is lit again: show the one deferred Custom message, if due (main.c) */
 int  saver_wants_bright(void);/* 1 = keep full brightness (vinyl art showcase), don't dim */
 int  ui_run_bounded(char *const argv[], int timeout_ms);  /* external cmd as a killable child w/ hard timeout */
-void ui_decode_lock(void);    /* serialize an ffmpeg artwork decode against the other decoders (OOM guard) */
+void ui_decode_lock(void);
+int ui_decode_speculative(unsigned *gen);    /* serialize an ffmpeg artwork decode against the other decoders (OOM guard) */
 void ui_decode_unlock(void);
 void tune_refresh(void);      /* re-sync Tune panel Play Mode/EQ labels on show */
 
@@ -267,6 +270,7 @@ void kbinput_open_password(const char *title, const char *initial, kbinput_done_
 int  kbinput_active(void);   /* 1 while the modal keyboard is up (suppress gestures) */
 /* search */
 void search_create(lv_obj_t *root);
+void search_refresh(void);
 void ui_clock_refresh(void);
 /* IPC decode seams (frames wired in once decoded) */
 int ui_seek_to(long ms);   /* returns 0 if the seek frame was queued, -1 if the send failed */
@@ -312,6 +316,7 @@ void ui_start_art_prewarm(void);          /* spawn the background cover/accent p
 int  ui_prewarm_enqueue(const char *path); /* MAIN thread: queue a track path for background cover decode; 1=queued/dup, 0=full */
 void ui_set_accent_config(int mode, int rgb);  /* 0=dynamic / 1=static(rgb); applies immediately */
 int  ui_accent_is_static(void);
+int ui_prewarm_enabled(void);
 void ui_set_prewarm_mode(int m);          /* 0=covers only 1=+per-track sweep when idle 2=+sweep when idle & charging */
 int  ui_run_cap_bounded(const char *cmd, char *out, int cap, int timeout_ms);   /* bt.c: popen-like capture, killed at timeout */
 int  bt_radio_on(void);              /* current mode; 0 = Album Art Cache off */
@@ -414,4 +419,7 @@ int  library_drill_context(int *list_type, char *name, int cap);
 int  library_back(void);
 /* the next Library entry starts at its top-level menu, as a fresh start does (Home swipe) */
 void library_reset_top(void);
+#include "art_identity.h"
+/* Verified picture reuse; books additionally retain full path ownership. */
+void sharp_cover_set_identity(const char *path, const art_picture_id *picture, int book);
 #endif

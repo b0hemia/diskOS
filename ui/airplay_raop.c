@@ -63,5 +63,6 @@ int aps_raop_encrypt(const uint8_t key[16], const uint8_t iv[16], const uint8_t 
     if(!rc && blocks) rc = mbedtls_aes_crypt_cbc(&c, MBEDTLS_AES_ENCRYPT, blocks, copy, p, out);
     if(!rc && n > blocks) memcpy(out + blocks, p + blocks, n - blocks);
     mbedtls_aes_free(&c); aps_wipe(copy, sizeof copy);
-    if(rc) aps_wipe(out, n); return rc ? -1 : 0;
+    if(rc) aps_wipe(out, n);
+    return rc ? -1 : 0;
 }

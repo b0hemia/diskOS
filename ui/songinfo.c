@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
+#include "indic.h"
 #include "screens.h"
 #include "theme.h"
 #include "musicdb.h"   /* mdb_is_book_path: this page doubles as "Book details" for an audiobook */
@@ -270,13 +271,13 @@ void songinfo_create(lv_obj_t *root)
         lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
         g_cell[i] = cell;
 
-        lv_obj_t *k = lv_label_create(cell);
+        lv_obj_t *k = indic_label_create(cell);
         lv_label_set_text(k, KEYS[i]);
         lv_obj_set_style_text_font(k, TF(UI_14), 0);
         lv_obj_set_style_text_color(k, TC(TEXT_MUTED), 0);
         g_key[i] = k;
 
-        lv_obj_t *v = lv_label_create(cell);
+        lv_obj_t *v = indic_label_create(cell);
         lv_obj_set_width(v, 268);
         lv_obj_set_style_text_align(v, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(v, LV_LABEL_LONG_WRAP);

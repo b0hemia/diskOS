@@ -368,15 +368,27 @@ int aps_session_volume(aps_session *s, int percent){
 }
 int aps_session_close(aps_session *s){
     int confirmed = !s->prepared || !s->rtp.counter || s->quiet;
+    int report = s->prepared || s->started || s->rtsp.fd >= 0;
+    int flush = -2, flush_status = 0, teardown = -2, teardown_status = 0;
+    const char *basis = !s->prepared ? "unprepared" : !s->rtp.counter ? "no packets" : s->quiet ? "quiet" : "none";
+    const char *cause = s->rtsp.dead ? "already dead" : "unverified";
     if(s->prepared && !s->rtsp.dead){
         int (*cancel)(void *) = s->rtsp.cancel; s->rtsp.cancel = NULL;
         if(s->started && !confirmed){
             char info[128]; snprintf(info, sizeof info, "RTP-Info: seq=%u;rtptime=%u\r\n", s->rtp.seq, s->rtp.timestamp);
-            if(!aps_rtsp_request(&s->rtsp, "FLUSH", s->rtsp.uri, info, NULL, 0, &s->reply, 250) && s->reply.status == 200) confirmed = 1;
+            flush = aps_rtsp_request(&s->rtsp, "FLUSH", s->rtsp.uri, info, NULL, 0, &s->reply, 250);
+            flush_status = s->reply.status;
+            if(!flush && flush_status == 200){ confirmed = 1; basis = "FLUSH"; }
+            cause = s->rtsp.diag_cause ? s->rtsp.diag_cause : "unverified";
         }
         /* A successful FLUSH plus retiring every sending socket is a playback
          * stop acknowledgement even if the receiver closes on TEARDOWN. */
-        if(!s->rtsp.dead && !aps_rtsp_request(&s->rtsp, "TEARDOWN", s->rtsp.uri, NULL, NULL, 0, &s->reply, 250) && s->reply.status == 200) confirmed = 1;
+        if(!s->rtsp.dead){
+            teardown = aps_rtsp_request(&s->rtsp, "TEARDOWN", s->rtsp.uri, NULL, NULL, 0, &s->reply, 250);
+            teardown_status = s->reply.status;
+            if(!teardown && teardown_status == 200){ confirmed = 1; basis = "TEARDOWN"; }
+            cause = s->rtsp.diag_cause ? s->rtsp.diag_cause : "unverified";
+        }
         s->rtsp.cancel = cancel;
     }
     aps_rtsp_close(&s->rtsp); aps_rtsp_close(&s->events); aps_mrp_close(&s->mrp); aps_remote_close(&s->remote);
@@ -385,5 +397,10 @@ int aps_session_close(aps_session *s){
     if(s->timing >= 0) close(s->timing);
     s->data = s->control = s->timing = -1; s->started = s->prepared = 0;
     aps_wipe(s->audio_key, 32); aps_wipe(s->rtp.key, 32); aps_wipe(s->rtp.iv, 16);
-    aps_wipe(&s->legacy_key, sizeof s->legacy_key); return confirmed;
+    aps_wipe(&s->legacy_key, sizeof s->legacy_key);
+    if(report) fprintf(stderr, "AirPlay stop confirmed=%d basis=%s FLUSH=%s TEARDOWN=%s io=%d status=%d cause=%s flush_io=%d flush_status=%d\n",
+        confirmed, basis, flush == -2 ? "skipped" : !flush && flush_status == 200 ? "ok" : "failed",
+        teardown == -2 ? "skipped" : !teardown && teardown_status == 200 ? "ok" : "failed",
+        teardown, teardown_status, cause, flush, flush_status);
+    return confirmed;
 }

@@ -48,6 +48,8 @@ static int g_wjobnet = 0;    /* connectivity the in-flight fetch saw (main threa
 static uint32_t g_wback = 0; /* connected retry wait, 0 = no failure yet (main thread only) */
 static int g_wskip = 0;      /* offline fetch: weather_poll publishes its failure (main thread only) */
 static int g_whold = 0;      /* request-start holds (weather_hold); > 0 blocks every start (main thread only) */
+static uint64_t g_upd_at = 0;   /* monotonic ms of the last successful fetch, 0 = none (main thread only) */
+static int g_wasked = 0;     /* the app's Refresh asked; the app shows its progress (main thread only) */
 
 /* ---- accepted-reading snapshot (read-only API: weather_snapshot_get) ----
  * The worker's STRUCTURED result (icon code, temperature, unit) is kept apart from the display string and
@@ -182,11 +184,11 @@ static void *weather_thread(void *arg)
         if (cl > 120) cl = 120;
         memcpy(cond, c, cl); cond[cl] = 0;
         char *tp = temp; if (*tp == '+') tp++;   /* drop leading + on positive temps */
-        snprintf(result, sizeof result, "%s  %s  %s", ic, tp, cond);   /* into local; g_wbuf write is under the lock */
+        snprintf(result, sizeof result, "%s  %s  %.120s", ic, tp, cond);   /* into local; g_wbuf write is under the lock */
         { size_t n = strlen(result);                    /* the service can pad the condition: trailing blanks would
                                                          * count in the centred label's width and push it off centre */
           while(n && (result[n - 1] == ' ' || result[n - 1] == '\t' || result[n - 1] == '\r' || result[n - 1] == '\n')) result[--n] = 0; }
-        fail = 0;
+        fail = !res.ok;
     }
     if (fail) fprintf(stderr, "weather: no usable data (resp='%.48s')\n", line);
     /* publish atomically: the lock release/acquire pairs with weather_poll so the
@@ -208,7 +210,7 @@ static void weather_start(int net)
      * an offline fetch. While held nothing starts and nothing is consumed: an asked refresh stays in
      * g_wwant, and an interval/retry start stays due because g_last and g_wback are untouched, so the
      * ordinary poll serves either after the last release, on its own schedule. */
-    if (g_whold > 0) return;
+    if (g_whold > 0 || !cfg_get_int("weather_on", 1)) return;
     int go = 0;
     pthread_mutex_lock(&g_wx_mu);
     if (!g_inflight && !g_wready) { g_inflight = 1; go = 1; }   /* claim slot */
@@ -259,6 +261,8 @@ void weather_fetch_async(void)
  * Asked refreshes (location change, stale result, reconnect, Settings on) never
  * wait for that backoff. Offline fetches fail without a worker. */
 static void weather_app_refresh(void);   /* fwd */
+static lv_obj_t *g_app_upd;  /* "Updated 7:42" line */
+static void wx_updated_text(char *out, int cap);   /* fwd */
 
 /* Enable/disable passive weather (home + screensaver display + the background fetch). Called from
  * Settings. Off = no wget, no display (battery); on = force a refetch on the next poll. */
@@ -297,6 +301,7 @@ void weather_poll(lv_timer_t *t)
         pthread_mutex_lock(&g_wx_mu);
         g_wready = 0;
         pthread_mutex_unlock(&g_wx_mu);
+        if (g_wasked) { g_wasked = 0; weather_app_refresh(); }   /* an asked refresh never stays "Updating..." */
         return;
     }
     int ready = 0, fail = 0, inflight;
@@ -314,6 +319,8 @@ void weather_poll(lv_timer_t *t)
                                     * lock and the next fetch only starts below, after this use. */
             g_have = 1;
             g_wback = 0;
+            g_upd_at = wx_now_ms_locked();   /* only reads the monotonic clock */
+            if (g_upd_at == UINT64_MAX) g_upd_at = 0;
             if (rr.ok) wx_snap_accept(rr.icon, rr.temp, rr.unit);   /* stamped now, at acceptance */
             home_set_weather(g_wbuf);
             saver_set_weather(g_wbuf);
@@ -321,11 +328,20 @@ void weather_poll(lv_timer_t *t)
             g_wback = g_wback ? g_wback * 2 : 20000u;
             if (g_wback > 600000u) g_wback = 600000u;
         }
+        if (g_wasked && !g_wwant && g_wjobgen == g_wgen) {   /* the asked refresh finished (not an earlier fetch) */
+            g_wasked = 0;
+            if (fail) ui_toast("Couldn't update the weather");
+        }
         weather_app_refresh();     /* shows data, or "Weather unavailable" if none yet */
     }
     /* Keep the glance-to-editor path even before the first usable response.
      * A stale reading still wins after a transient failure; the saver stays quiet. */
     if (!g_have) home_set_weather("Weather unavailable");
+    if (g_app_upd) {   /* keep "Updated" current ("5 min ago", clock set later); only redraw on a change */
+        char u[48];
+        wx_updated_text(u, sizeof u);
+        if (strcmp(lv_label_get_text(g_app_upd), u)) lv_label_set_text(g_app_upd, u);
+    }
     uint32_t interval = g_have ? 600000u : net > 0 && g_wback ? g_wback : 20000u;
     if (!inflight && (g_wwant || lv_tick_get() - g_last > interval)) weather_start(net);
 }
@@ -333,6 +349,18 @@ void weather_poll(lv_timer_t *t)
 /* ---- Weather app: set the location used for home + screensaver weather ---- */
 static lv_obj_t *g_app_w;    /* current weather text */
 static lv_obj_t *g_app_loc;  /* current location line */
+
+/* "Updated 7:42". weather.c keeps only the monotonic age; the clock code turns it into a time of day,
+ * so a clock set or corrected after the fetch still shows the right time. */
+static void wx_updated_text(char *out, int cap)
+{
+    if (g_wasked) { snprintf(out, cap, "Updating..."); return; }
+    uint64_t now = wx_now_ms_locked();
+    if (!g_upd_at || now == UINT64_MAX || now < g_upd_at) { out[0] = 0; return; }
+    char when[24];
+    ui_clock_text_ago(now - g_upd_at, when, sizeof when);
+    snprintf(out, cap, "Updated %s", when);
+}
 
 static void weather_app_refresh(void)
 {
@@ -352,6 +380,11 @@ static void weather_app_refresh(void)
         char b[128];
         snprintf(b, sizeof b, "Location:  %s", (l && l[0]) ? l : "Auto (by IP)");
         lv_label_set_text(g_app_loc, b);
+    }
+    if (g_app_upd) {
+        char u[48];
+        wx_updated_text(u, sizeof u);
+        lv_label_set_text(g_app_upd, u);
     }
 }
 
@@ -405,6 +438,7 @@ static void loc_done(const char *text)
     cfg_set_str("weather_loc", text);   /* empty Save clears to Auto */
     g_wgen++;                   /* invalidate any in-flight fetch for the old location */
     g_have = 0;                 /* force a fresh fetch + show "Fetching" */
+    g_upd_at = 0;               /* no "Updated" time for a place not fetched yet */
     wx_snap_invalidate();       /* a reading for the old location is never kept */
     g_wback = 0;                /* the new location starts its own retry backoff */
     weather_fetch_async();
@@ -420,12 +454,22 @@ static void auto_loc_cb(lv_event_t *e)
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     loc_done("");
 }
+static void refresh_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (!cfg_get_int("weather_on", 1)) { ui_toast("Weather is off in Settings"); return; }
+    if (wifi_connectivity() == 0) { ui_toast("No Wi-Fi"); return; }
+    if (g_wasked) return;       /* already updating */
+    g_wasked = 1;
+    weather_fetch_async();      /* starts now, or as soon as the running fetch is applied */
+    weather_app_refresh();
+}
 
-static lv_obj_t *wapp_btn(lv_obj_t *root, int y, const char *label, lv_event_cb_t cb)
+static lv_obj_t *wapp_btn(lv_obj_t *root, const char *label, lv_event_cb_t cb)
 {
     lv_obj_t *b = lv_button_create(root);
     lv_obj_remove_style_all(b);
-    lv_obj_set_pos(b, 50, y); lv_obj_set_size(b, 260, 52);
+    lv_obj_set_size(b, 260, 52);
     lv_obj_set_style_radius(b, 26, 0);
     lv_obj_set_style_bg_color(b, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_70, 0);
@@ -447,22 +491,41 @@ void weather_app_create(lv_obj_t *root)
 
     ui_header(root, "Weather");   /* shared standard header */
 
+    /* body: a centred column in the clear middle band; the last button scrolls clear of the round bezel */
+    lv_obj_t *body = lv_obj_create(root);
+    lv_obj_remove_style_all(body);
+    lv_obj_set_size(body, 300, 270);
+    lv_obj_align(body, LV_ALIGN_TOP_MID, 0, 84);
+    lv_obj_set_style_pad_bottom(body, 44, 0);
+    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(body, 8, 0);
+    lv_obj_set_scroll_dir(body, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(body, LV_SCROLLBAR_MODE_OFF);
+
     s_appwfont = *TF(UI_22);
     s_appwfont.fallback = &font_weather16;
-    g_app_w = lv_label_create(root);
-    lv_obj_set_pos(g_app_w, 0, 96); lv_obj_set_width(g_app_w, 360);
+    g_app_w = lv_label_create(body);
+    lv_obj_set_width(g_app_w, 300);
     lv_obj_set_style_text_align(g_app_w, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(g_app_w, &s_appwfont, 0);
     lv_obj_set_style_text_color(g_app_w, TC(TEXT_PRIMARY), 0);
 
-    g_app_loc = lv_label_create(root);
-    lv_obj_set_pos(g_app_loc, 0, 140); lv_obj_set_width(g_app_loc, 360);
+    g_app_upd = lv_label_create(body);
+    lv_obj_set_width(g_app_upd, 300);
+    lv_obj_set_style_text_align(g_app_upd, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(g_app_upd, TF(UI_14), 0);
+    lv_obj_set_style_text_color(g_app_upd, TC(TEXT_SECONDARY), 0);
+
+    g_app_loc = lv_label_create(body);
+    lv_obj_set_width(g_app_loc, 300);
     lv_obj_set_style_text_align(g_app_loc, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(g_app_loc, TF(UI_14), 0);
     lv_obj_set_style_text_color(g_app_loc, TC(TEXT_MUTED), 0);
 
-    wapp_btn(root, 186, "Set Location", set_loc_cb);
-    wapp_btn(root, 248, "Auto (by IP)", auto_loc_cb);
+    wapp_btn(body, "Refresh", refresh_cb);
+    wapp_btn(body, "Set Location", set_loc_cb);
+    wapp_btn(body, "Auto (by IP)", auto_loc_cb);
 
     weather_app_refresh();
 }

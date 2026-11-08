@@ -51,6 +51,7 @@ int power_read_sysconfig(const char *db_path, const char *column){
     const char *sql = NULL;
     if(column && !strcmp(column, "POWER_SAVE")) sql = "SELECT POWER_SAVE FROM SYSCONFIG WHERE ID=1;";
     else if(column && !strcmp(column, "CHARGE_PROTECT")) sql = "SELECT CHARGE_PROTECT FROM SYSCONFIG WHERE ID=1;";
+    else if(column && !strcmp(column, "PLAY_GAP")) sql = "SELECT PLAY_GAP FROM SYSCONFIG WHERE ID=1;";
     if(!sql || !db_path) return -1;
     sqlite3 *c = NULL; int v = -1;
     if(sqlite3_open_v2(db_path, &c, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK){
@@ -133,6 +134,7 @@ static void pw_fail(const char *msg){
     }
     g_pw.ops.quiesce_end(g_pw.ops.ctx);
     g_pw.phase = PW_OFF;
+    power_idle_reset();
     g_pw.ops.toast(g_pw.ops.ctx, msg);
 }
 int power_shutdown_begin(const power_ops_t *o){
@@ -247,6 +249,10 @@ static int idle_request(void){
 }
 void power_note_input(void){ g_key_ms = lv_tick_get(); g_have_key = 1; }
 void power_startup_mirror(void){
+    if(cfg_get_int("gapless", -1) < 0){   /* adopt stock once; never replace a saved diskOS choice */
+        int gap = power_read_sysconfig(POWER_SYSCONFIG, "PLAY_GAP");
+        if(gap == 0 || gap == 1) cfg_set_int("gapless", gap);
+    }
     if(!power_supported()) return;
     idle_takeover();
     int c = power_read_sysconfig(POWER_SYSCONFIG, "CHARGE_PROTECT");

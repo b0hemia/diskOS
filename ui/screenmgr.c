@@ -148,26 +148,37 @@ static void anim_done_push(lv_anim_t *a)
     scrim_off();
 }
 
+/* Leave hooks also run for entries discarded by a history unwind. */
+static void screen_leave(int from, int to)
+{
+    /* Any screen change dismisses transient lv_layer_top popups (e.g. the duplicate-add
+     * confirm dialog) so they can't survive onto another screen and act on stale state. */
+    npmenu_close_transients();
+    ui_np_close_overlays();   /* dismiss the sleep-timer popover so it can't float onto another screen */
+    static int saver_custom;   /* the saver temporarily covers the custom area */
+    if ((custom_area(from) || (from == SCR_SAVER && saver_custom)) &&
+        !custom_area(to) && to != SCR_SAVER) custom_ov_draft_discard();
+    if (to != SCR_SAVER) saver_custom = 0;
+    else if (from != SCR_SAVER) saver_custom = custom_area(from);
+    if (from == SCR_CUSTOM_PREVIEW && to != from) custom_preview_leave();   /* every way off the Preview: STOP */
+    if (from == SCR_CUSTOM_PICKER && to != from) custom_picker_leave();   /* every way off the image list: timer and scan end */
+    if (from == SCR_SAVER && to != SCR_SAVER) saver_leave();   /* every way off the saver: wake, screen off, Back, a screen_show; deletes Custom (slice 14) */
+
+    if (from == SCR_CASTPICK && to != from) cast_ui_leave();   /* 17a: every exit stops discovery */
+    if(from == SCR_NPHUB && to != from) nphub_poll_sync(0);
+}
+
 /* Slide between screens. dir = +1 push (new from right), -1 pop (new from left). */
 static void transition(int from, int to, int dir)
 {
     lv_obj_t *nw = (to >= 0 && to < SCR_COUNT) ? s_roots[to] : NULL;
     lv_obj_t *od = (from >= 0 && from < SCR_COUNT) ? s_roots[from] : NULL;
 
-    /* Any screen change dismisses transient lv_layer_top popups (e.g. the duplicate-add
-     * confirm dialog) so they can't survive onto another screen and act on stale state. */
-    npmenu_close_transients();
-    ui_np_close_overlays();   /* dismiss the sleep-timer popover so it can't float onto another screen */
-    if (custom_area(from) && !custom_area(to)) custom_ov_draft_discard();
-    if (from == SCR_CUSTOM_PREVIEW && to != from) custom_preview_leave();   /* every way off the Preview: STOP */
-    if (from == SCR_CUSTOM_PICKER && to != from) custom_picker_leave();   /* every way off the image list: timer and scan end */
-    if (from == SCR_SAVER && to != SCR_SAVER) saver_leave();   /* every way off the saver: wake, screen off, Back, a screen_show; deletes Custom (slice 14) */
+    screen_leave(from, to);
 
     /* Re-sync screens built once, on EVERY entry incl. back-navigation (screen_back also
      * routes through here - screen_show alone missed the back case, leaving stale labels
      * e.g. after editing Custom EQ / a setting detail page). */
-    if (from == SCR_CASTPICK && to != from) cast_ui_leave();   /* 17a: every exit stops discovery */
-    if(from == SCR_NPHUB && to != from) nphub_poll_sync(0);
     if (to == SCR_CASTPICK && to != from) cast_ui_enter();
     if (to == SCR_SETTINGS) settings_refresh_list();
     else if (to == SCR_SETLIST) setlist_refresh();          /* one category's rows, rebuilt per entry */
@@ -261,9 +272,46 @@ static void transition(int from, int to, int dir)
     ui_np_title_scroll(ui_screen_backlight_on());
 }
 
+/* These views describe the one playback session, including receiver playback
+ * on the NP root and its Beam picker. Browsers, source/output settings and
+ * temporary takeovers (Quick Settings and saver) retain ordinary push behavior. */
+static int screen_single_instance(int which)
+{
+    switch (which) {
+    case SCR_NOWPLAYING: case SCR_UPNEXT: case SCR_LYRICS: case SCR_CHAPTERS:
+    case SCR_SONGINFO: case SCR_NPMENU: case SCR_NPHUB: case SCR_TUNE:
+    case SCR_EQ: case SCR_CASTPICK:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* Discard a suffix without entering or drawing the screens in between. Leave
+ * hooks are idempotent: covered screens have already left once, but resources
+ * such as BT info can remain live until their history entry is removed. */
+static void screen_unwind(int depth, int which)
+{
+    int from = s_current;
+    if (from == SCR_BT_INFO) bt_info_close();
+    for (int i = s_sp - 1; i > depth; i--) {
+        int removed = s_stack[i];
+        if (removed == SCR_BT_INFO) bt_info_close();
+        screen_leave(removed, which);
+    }
+    s_sp = depth;
+    s_current = which;
+    transition(from, which, -1);
+}
+
 void screen_show(int which)
 {
     if (which < 0 || which >= SCR_COUNT) return;
+    if (screen_single_instance(which) && which != s_current) {
+        for (int i = s_sp - 1; i >= 0; i--) {
+            if (s_stack[i] == which) { screen_return_to(which); return; }
+        }
+    }
     int from = s_current;
     if (which != s_current) {
         int cap = (int)(sizeof(s_stack)/sizeof(s_stack[0]));
@@ -278,19 +326,14 @@ void screen_show(int which)
     transition(from, which, +1);
 }
 
-/* Explicit returns (e.g. a queue selection) finish a detour rather than pushing
- * another copy of its destination. Ordinary screen_show keeps its forward
- * semantics: repeated screen IDs may represent different browsing contexts. */
+/* Explicit returns also support ordinary screens: use their nearest occurrence. */
 void screen_return_to(int which)
 {
     if (which < 0 || which >= SCR_COUNT) return;
     if (which == s_current) { screen_show(which); return; }
     for (int i = s_sp - 1; i >= 0; i--) {
         if (s_stack[i] != which) continue;
-        int from = s_current;
-        s_sp = i;
-        s_current = which;
-        transition(from, which, -1);
+        screen_unwind(i, which);
         return;
     }
     screen_show(which);
@@ -301,29 +344,19 @@ void screen_back(void)
 {
     if (s_current == SCR_CUSTOM_PICKER && custom_picker_back()) return;   /* a preview is open: Back closes it, the list stays */
     if (s_sp <= 0) return;
-    int from = s_current;
-    int prev = s_stack[--s_sp];
-    if(from == SCR_BT_INFO) bt_info_close();
-    s_current = prev;
-    transition(from, prev, -1);
+    screen_unwind(s_sp - 1, s_stack[s_sp - 1]);
 }
 
 /* Home swipe: close every screen above Home in one step. The current screen goes the way a Back takes it (its
  * leave hooks run in transition) and Home is revealed directly, so no screen in between is drawn. Screens further
- * down already ran their leave hooks when they were covered. Library reopens at its top level. Refused like Back
+ * down get leave cleanup without being entered or drawn. Library reopens at its top level. Refused like Back
  * while the image list applies a picture. Returns 1 when it went Home. */
 int screen_home(void)
 {
     if (s_current == SCR_HOME) return 0;
     if (s_current == SCR_CUSTOM_PICKER && custom_picker_busy()) return 0;
-    int bt_info = s_current == SCR_BT_INFO;
-    for (int i = 0; i < s_sp; i++) if (s_stack[i] == SCR_BT_INFO) bt_info = 1;
-    if (bt_info) bt_info_close();
     library_reset_top();
-    int from = s_current;
-    s_sp = 0;
-    s_current = SCR_HOME;
-    transition(from, SCR_HOME, -1);
+    screen_unwind(0, SCR_HOME);
     return 1;
 }
 

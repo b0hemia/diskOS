@@ -62,11 +62,9 @@ int fw_os_ver(void){
 int fw_needs_localplayer_init(void){ int v = fw_os_ver(); return v == 240 || v == 257; }
 int fw_needs_direct_sd_mount(void){  int v = fw_os_ver(); return v == 240 || v == 257; }
 
-/* Firmware whose player accepts the Custom EQ editor's fixed 10-band curve (32 Hz..16 kHz) as written. V2.57's PEQ
- * loader rejects and REPAIRS (and may persist) any band above half its internal processing rate, which diskOS
- * cannot read yet; at low source rates the 8 k/16 k bands exceed it. So the editor is view-only there (and on
- * unknown firmware) until the processing rate is measured on a V2.57 device. */
-int fw_custom_peq_writable(void){ int v = fw_os_ver(); return v == 209 || v == 228 || v == 240; }
+/* V2.57 uses stock single-control edits; older players retain write-and-select. */
+int fw_custom_peq_writable(void){ int v = fw_os_ver(); return v == 209 || v == 228 || v == 240 || v == 257; }
+int fw_peq_band_edit(void){ return fw_os_ver() == 257; }
 
 /* V2.57's player arbitrates the radios at boot: with both Wi-Fi and Bluetooth saved on it keeps Bluetooth, turns
  * Wi-Fi off and saves WIFI_STATUS=0 (P257@0x4ecf94..0x4ed030; absent from V2.40). diskOS waits for startup

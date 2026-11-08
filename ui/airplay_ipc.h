@@ -39,6 +39,8 @@ int aps_ipc_send(int socket, uint32_t attempt, aps_message *, int fd);
 /* 1 message; 0 EAGAIN; -1 closed, malformed or IO. Unexpected rights are closed.
  * Stale messages are discarded with their descriptors and return 0. */
 int aps_ipc_receive(int socket, uint32_t attempt, aps_message *, int *fd);
+/* Same result and descriptor handling, with a diagnostic on -1. */
+int aps_ipc_receive_reason(int socket, uint32_t attempt, aps_message *, int *fd, const char **reason);
 int aps_worker_dispatch(int argc, char **argv, int *status);
 int aps_worker_main(int ctl, uint32_t attempt);
 #endif

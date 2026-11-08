@@ -42,12 +42,12 @@ static void handle(cast_ctl *c, cast_action a, cc_act *o, int *n){
         return;
     }
     if(a.kind == CA_LOAD){
-        c->prior = c->pend || c->orph || c->out; c->pend = 1; c->known = 0; c->pgen = a.gen; c->wp = c->playing; c->orph = 0; c->pdue = c->now + (uint32_t)c->d.load_ms;
+        c->stopped = 0; c->prior = c->pend || c->orph || c->out; c->pend = 1; c->known = 0; c->pgen = a.gen; c->wp = c->playing; c->orph = 0; c->pdue = c->now + (uint32_t)c->d.load_ms;
         x = put(o, n, CC_A_LOAD); x->k = a.k; x->start_ms = a.start_ms; x->skipped = a.skipped; x->qgen = c->qgen; x->gen = a.gen; x->row = &c->row;
         x->queue_pos = s->cur.pos + 1; x->queue_len = s->q.n;
     } else if(a.kind == CA_STAY_PAUSED){
         int stop = c->pend || c->orph || c->out;   /* an older LOAD is still out, or the adopted media is still playing (14e2 C1): it must not outlive this choice on the receiver */
-        c->pend = c->orph = 0;
+        c->stopped = 0; c->pend = c->orph = 0;
         x = put(o, n, CC_A_STAY_PAUSED); x->reason = a.reason; x->cause = a.cause; x->k = a.k; x->skipped = a.skipped; x->qgen = c->qgen; x->gen = a.gen;
         x->row = row_of(c, a.k) ? NULL : &c->row; x->queue_pos = s->cur.pos + 1; x->queue_len = s->q.n;
         toast(o, n, a.reason == CA_QUEUE_FINISHED ? CC_T_QUEUE_FINISHED : a.cause == CA_C_EXCLUDED || a.cause == CA_C_UNKNOWN_FORMAT ? CC_T_UNSUPPORTED :
@@ -61,7 +61,7 @@ static void republish(cast_ctl *c, cc_act *o, int *n){
     x->playing = c->wp; x->start_ms = (int)(s->cur.base * 1000.0); x->media_id = s->cur.media_id;
 }
 static void release_all(cast_ctl *c){
-    drop(&c->s[0]); drop(&c->s[1]); c->active = c->pend = c->known = c->playing = c->settle = c->wp = c->orph = c->out = c->prior = 0; c->qgen++;
+    drop(&c->s[0]); drop(&c->s[1]); c->active = c->pend = c->known = c->playing = c->settle = c->wp = c->orph = c->out = c->prior = c->stopped = 0; c->qgen++;
 }
 static int select_(cast_ctl *c, const cc_ev *e, cc_act *o, int *n){
     int t = 1 - c->a, r;
@@ -83,6 +83,13 @@ static int select_(cast_ctl *c, const cc_ev *e, cc_act *o, int *n){
     c->out = 0;
     return 0;
 }
+static void stopped(cast_ctl *c, cc_act *o, int *n){
+    cast_cursor *u = &c->s[c->a].cur;
+    c->stopped = 1; c->playing = c->wp = c->settle = 0;
+    u->media_id = 0; /* consume this media once, keep pos/order (including duplicate songs) */
+    republish(c, o, n);
+    o[*n - 1].kind = CC_A_STOPPED; o[*n - 1].start_ms = 0;
+}
 static void snapshot(cast_ctl *c, const cc_ev *e, cc_act *o, int *n){
     cast_cursor *u = &c->s[c->a].cur; cc_act *x;
     if(c->pend){
@@ -90,6 +97,7 @@ static void snapshot(cast_ctl *c, const cc_ev *e, cc_act *o, int *n){
             if(e->load_state == CS_JOB_FAILED){ cast_action a = cast_cursor_failed(u, c->pgen); c->pend = 0; handle(c, a, o, n); return; }
             if(e->load_state == CS_JOB_OK && e->media_id > 0){
                 cast_cursor_adopted(u, c->pgen, e->media_id); c->pend = 0;
+                if(e->player == CS_PL_IDLE && e->idle == CS_IDLE_CANCELLED){ stopped(c, o, n); return; }
                 if(c->wp){ x = put(o, n, CC_A_PLAY_AFTER_ADOPT); x->qgen = c->qgen; x->gen = c->pgen; c->settle = 1; }
                 republish(c, o, n);
                 return;
@@ -100,7 +108,10 @@ static void snapshot(cast_ctl *c, const cc_ev *e, cc_act *o, int *n){
         if(c->d.load_ms > 0 && (int32_t)(c->now - c->pdue) >= 0){ cast_action a = cast_cursor_failed(u, c->pgen); handle(c, a, o, n); }
         return;
     }
+    if(c->known && e->load_seq != c->pseq) return;
+    c->known = 1; c->pseq = e->load_seq;
     if(e->media_id <= 0 || e->media_id != u->media_id) return;   /* not the owned media (or already consumed: a duplicate FINISHED) */
+    if(e->player == CS_PL_IDLE && e->idle == CS_IDLE_CANCELLED){ stopped(c, o, n); return; }
     cast_cursor_progress(u, u->gen, e->media_id, e->media_time);
     if(e->player == CS_PL_PLAYING){ c->playing = 1; c->settle = 0; }
     else if(e->player == CS_PL_PAUSED && !c->settle) c->playing = 0;
@@ -124,6 +135,9 @@ int cast_ctl_step(cast_ctl *c, const cc_ev *e, cc_act out[CC_ACT_MAX]){
     if(!c->active || (e->qgen && e->qgen != c->qgen)) return 0;   /* torn down, or an event about a replaced queue */
     cast_cursor *u = &c->s[c->a].cur;
     switch(e->type){
+    case CC_EV_PLAY:
+        if(c->stopped && !c->pend){ c->playing = 1; handle(c, cast_cursor_play(u, 0), out, &n); }
+        break;
     case CC_EV_SNAPSHOT: snapshot(c, e, out, &n); break;
     case CC_EV_LOAD_STARTED: case CC_EV_LOAD_REFUSED:
         if(!c->pend || c->known || e->gen != c->pgen) break;   /* an older LOAD's report: superseded */

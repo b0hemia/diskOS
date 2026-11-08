@@ -26,6 +26,7 @@ typedef struct {
     audio_decode *decoder; audio_convert *converter; audio_feed feed;
     uint64_t input_offset, submitted, observed;
     int64_t anchor_ms, pause_since, last_view, last_progress;
+    const char *service_reason;
     rd_receiver target;
 } worker;
 static int send_message(worker *w, aps_message *m){ return aps_ipc_send(w->ctl, w->attempt, m, -1); }
@@ -33,26 +34,26 @@ static int notify(worker *w, unsigned type){ aps_message m = { .type = type }; r
 static int service(void *ctx){
     worker *w = ctx;
     if(w->cancel) return 1;
-    if(aps_session_service(&w->session)){ w->failure = 1; return 1; }
+    if(aps_session_service(&w->session)){ w->service_reason = "session service failed"; w->failure = 1; return 1; }
     aps_message remote;
     while(aps_remote_take(&w->session.remote, &remote)){
         if(!w->ready){
             if(remote.command == APS_VOLUME_OBSERVED){
-                if(remote.position_ms < 0 || remote.position_ms > 100){ w->failure = 1; return 1; }
+                if(remote.position_ms < 0 || remote.position_ms > 100){ w->service_reason = "invalid receiver volume"; w->failure = 1; return 1; }
                 w->volume = (int)remote.position_ms; w->have_volume = 1;
                 if(w->volume > 0) w->unmute_volume = w->volume;
             }
             continue;
         }
-        if(w->count == 16){ w->failure = 1; return 1; }
+        if(w->count == 16){ w->service_reason = "remote command queue full"; w->failure = 1; return 1; }
         w->pending[w->count] = remote; w->descriptors[w->count++] = -1;
     }
     for(unsigned i = 0; i < 16; i++){
-        aps_message m; int fd; int n = aps_ipc_receive(w->ctl, w->attempt, &m, &fd);
-        if(n < 0){ w->cancel = 1; return 1; }
+        aps_message m; int fd; const char *reason; int n = aps_ipc_receive_reason(w->ctl, w->attempt, &m, &fd, &reason);
+        if(n < 0){ fprintf(stderr, "AirPlay worker end reason=%s\n", reason); w->cancel = 1; return 1; }
         if(!n) break;
-        if(m.type == APS_CANCEL){ if(fd >= 0) close(fd); w->cancel = 1; return 1; }
-        if(w->count == 16){ if(fd >= 0) close(fd); w->failure = 1; return 1; }
+        if(m.type == APS_CANCEL){ if(fd >= 0) close(fd); fprintf(stderr, "AirPlay worker end reason=APS_CANCEL\n"); w->cancel = 1; return 1; }
+        if(w->count == 16){ if(fd >= 0) close(fd); w->service_reason = "IPC command queue full"; w->failure = 1; return 1; }
         w->pending[w->count] = m; w->descriptors[w->count++] = fd;
     }
     return 0;
@@ -255,6 +256,7 @@ static int command(worker *w, const aps_message *m){
     track *t = &w->tracks[w->audible]; int play;
     switch(m->command){
     case APS_REMOTE_STOP: {
+        fprintf(stderr, "AirPlay worker end reason=receiver stop\n");
         aps_message notice = { .type = APS_NOTICE, .command = APS_REMOTE_STOP };
         if(send_message(w, &notice)) return -1;
         w->cancel = 1; return 0;
@@ -300,7 +302,7 @@ static int command(worker *w, const aps_message *m){
                 if(!w->have_volume){ (void)aps_mrp_volume(&w->session.mrp, -1); return refused(w, PB_CMD_VOLUME); }
                 current = w->volume;
             }
-            level = current + (level == -1 ? 2 : -2);
+            level = current + (level == -1 ? 1 : -1);
             if(level < 0) level = 0;
             if(level > 100) level = 100;
         }
@@ -440,43 +442,48 @@ static int feed(worker *w){
 }
 int aps_worker_main(int ctl, uint32_t attempt){
     if(ctl==3) audio_decode_stock_supervise(4,attempt);
-    worker *w = calloc(1, sizeof *w); if(!w) return 1;
+    worker *w = calloc(1, sizeof *w); if(!w){ fprintf(stderr, "AirPlay worker end reason=allocation failed\n"); return 1; }
     w->ctl = ctl; w->attempt = attempt; w->ingest = w->audible = w->chosen = -1;
     for(int i = 0; i < SLOT_COUNT; i++) w->tracks[i].fd = w->tracks[i].art_fd = -1;
     for(int i = 0; i < 16; i++) w->descriptors[i] = -1;
     struct sigaction action = { .sa_handler = SIG_DFL }; sigemptyset(&action.sa_mask);
     sigaction(SIGALRM, &action, NULL); alarm(0); sigaction(SIGCHLD, &action, NULL);
     aps_session_init(&w->session, service, w);
+    const char *end_reason = "startup failed";
     int64_t deadline = aps_now_ms() + 5000; aps_message first; int fd = -1, got = 0;
     while(!service(w) && aps_now_ms() < deadline){
         if(pop(w, &first, &fd)){ got = 1; break; }
         struct pollfd p = { ctl, POLLIN, 0 }; (void)poll(&p, 1, 20);
     }
     int rc = 1; if(fd >= 0) close(fd);
-    if(!got || first.type != APS_TARGET) goto end;
+    if(!got || first.type != APS_TARGET){ end_reason = got ? "expected TARGET" : "TARGET timeout"; goto end; }
     w->target = first.target;
-    if(first.command > 1 || (first.command && (!w->target.stable_id || aps_session_forget(w->target.id)))) goto end;
+    if(first.command > 1 || (first.command && (!w->target.stable_id || aps_session_forget(w->target.id)))){
+        end_reason = first.command > 1 ? "invalid TARGET command" : !w->target.stable_id ? "forget requires stable id" : "forget failed"; goto end;
+    }
     aps_pair_io io = { w, pair_post, pin };
-    if(aps_session_prepare(&w->session, &w->target, &io)) goto end;
-    if(notify(w, APS_READY)) goto end;
+    if(aps_session_prepare(&w->session, &w->target, &io)){ end_reason = "prepare failed"; goto end; }
+    if(notify(w, APS_READY)){ end_reason = "READY send failed"; goto end; }
+    end_reason = "session service failed";
     while(!service(w)){
-        if(handle(w)){ w->failure = 1; break; }
+        if(handle(w)){ end_reason = "message handling failed"; w->failure = 1; break; }
         if(!w->navigating && w->navigation_count){
             aps_message next = w->navigation[0];
             --w->navigation_count;
             memmove(w->navigation, w->navigation + 1, w->navigation_count * sizeof *w->navigation);
             unsigned remaining = w->navigation_count;
             w->navigation_count = 0;
-            if(command(w, &next)){ w->failure = 1; break; }
+            if(command(w, &next)){ end_reason = "navigation failed"; w->failure = 1; break; }
             w->navigation_count = remaining;
         }
-        if(feed(w)){ w->failure = 1; break; }
+        if(feed(w)){ end_reason = "feed failed"; w->failure = 1; break; }
         if(w->ready && !w->running && !w->cold && aps_now_ms() - w->pause_since >= 30000){
+            fprintf(stderr, "AirPlay transport retire reason=paused 30s\n");
             aps_remote remote = w->session.remote; aps_remote_init(&w->session.remote);
             (void)aps_session_close(&w->session); w->session.remote = remote; w->cold = 1;
         }
         if(w->session.prepared && !w->cold && !w->session.legacy && aps_now_ms() - w->session.last_feedback >= 2000){
-            if(aps_rtsp_request(&w->session.rtsp, "POST", "/feedback", NULL, NULL, 0, &w->session.reply, 1000) || w->session.reply.status != 200){ w->failure = 1; break; }
+            if(aps_rtsp_request(&w->session.rtsp, "POST", "/feedback", NULL, NULL, 0, &w->session.reply, 1000) || w->session.reply.status != 200){ end_reason = "feedback failed"; w->failure = 1; break; }
             w->session.last_feedback = aps_now_ms();
         }
         struct pollfd polls[4] = { { ctl, POLLIN, 0 } }; nfds_t count = 1;
@@ -489,8 +496,8 @@ end:
     if(rc && !w->cancel){
         aps_session *s = &w->session; aps_rtsp *r = &s->rtsp;
         int error = s->error ? s->error : APS_ERR_STREAM;
-        fprintf(stderr, "AirPlay give-up step=%.39s io=%d status=%d bytes=%zu rc=%d error=%d verified=%d ready=%d\n",
-            r->diag_step, r->diag_io, r->diag_status, r->diag_n, r->diag_rc, error, s->verified, w->ready);
+        fprintf(stderr, "AirPlay give-up reason=%s step=%.39s io=%d status=%d bytes=%zu rc=%d error=%d verified=%d ready=%d\n",
+            w->service_reason ? w->service_reason : end_reason, r->diag_step, r->diag_io, r->diag_status, r->diag_n, r->diag_rc, error, s->verified, w->ready);
         if(s->verified && (error == APS_ERR_CONNECT || error == APS_ERR_STREAM))
             error = w->ready ? APS_ERR_STREAM : APS_ERR_START;
         aps_message m = { .type = APS_FAILED, .error = error }; (void)send_message(w, &m);

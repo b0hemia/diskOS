@@ -376,3 +376,14 @@ rebuilding and relinking the native tools against modified libusb. Keep those
 files with the app when redistributing. See `build/MACOS_FROZEN_DEPENDENCIES.md`
 for the required matching-runtime notice/source additions. The freezer refuses
 a package missing these files. Ad-hoc signing adds no redistribution restriction.
+
+HarfBuzz 14.6.0 is bundled under the Old MIT licence; see
+`licenses/HarfBuzz-COPYING` and the retained COPYING files in its subtrees.
+SheenBidi 3.0.0 is bundled under Apache-2.0; see
+`licenses/SheenBidi-Apache-2.0.txt`. The unmodified canary fonts in
+`tools/hbcanary/fonts/` remain under OFL-1.1, with their five licence texts
+alongside the fonts. These separate font assets retain their original names
+and licences. The Unicode 17.0.0 bidi conformance data in `tools/hbcanary/bidi/`
+(test fixtures, not shipped to the device) is under the Unicode License v3;
+see `licenses/Unicode-License-v3.txt`. See `licenses/README.md` for the
+component mapping.

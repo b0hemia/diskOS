@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
+#include "indic.h"
 #include "screens.h"
 #include "theme.h"
 #include "theme_kit.h"
@@ -20,10 +21,11 @@ static lv_obj_t *g_results;
 /* Two layouts: EMPTY (nothing typed) centres the field in the middle of the screen; ACTIVE (a query)
  * pins the field to the top and gives the whole screen to results. */
 static void search_layout(int active){
+    if(!indic_text(lv_label_get_text(g_bar_lbl)) && lv_obj_has_state(g_bar_lbl, LV_STATE_USER_4)) lv_obj_remove_state(g_bar_lbl, LV_STATE_USER_4);
     if(active){
         lv_obj_set_size(g_bar, 240, 40);
         lv_obj_align(g_bar, LV_ALIGN_TOP_LEFT, 60, 76);
-        lv_obj_set_size(g_bar_lbl, 184, 18);
+        lv_obj_set_size(g_bar_lbl, 184, indic_text(lv_label_get_text(g_bar_lbl)) ? indic_line_height(lv_label_get_text(g_bar_lbl), lv_obj_get_style_text_font(g_bar_lbl, 0)) : 18);
         lv_obj_set_style_text_align(g_bar_lbl, LV_TEXT_ALIGN_LEFT, 0);
         lv_obj_align(g_bar_lbl, LV_ALIGN_LEFT_MID, 14, 0);
         if(g_clear) lv_obj_set_pos(g_clear, 264, 81);
@@ -63,7 +65,7 @@ static void rebuild(const char *q){
     int n = (q && q[0]) ? mdb_search(q, buf, MAX_RESULTS + 1) : 0;
     int shown = n > MAX_RESULTS ? MAX_RESULTS : n;
     if(n<=0){
-        lv_obj_t *l = lv_label_create(g_results);
+        lv_obj_t *l = indic_label_create(g_results);
         lv_label_set_text(l, (q && q[0]) ? "No results" : "Tap the bar to search");
         lv_obj_set_style_text_color(l, TC(TEXT_MUTED), 0);
         lv_obj_set_style_text_font(l, TF(UI_14), 0);
@@ -81,21 +83,22 @@ static void rebuild(const char *q){
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         ui_on(row, result_cb, LV_EVENT_CLICKED, (void*)(uintptr_t)s->id, "search.result", UI_CORE);
-        lv_obj_t *t = lv_label_create(row);
+        lv_obj_t *t = indic_label_create(row);
         lv_label_set_text(t, s->title[0]?s->title:"Untitled");
         lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
         lv_obj_set_pos(t, 12, 5); lv_obj_set_size(t, 244, 19);
         lv_obj_set_style_text_font(t, TF(USER_16), 0);   /* CJK titles via Source Han Sans fallback */
         lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
-        lv_obj_t *a = lv_label_create(row);
+        lv_obj_t *a = indic_label_create(row);
         lv_label_set_text(a, s->artist);
         lv_label_set_long_mode(a, LV_LABEL_LONG_DOT);
         lv_obj_set_pos(a, 12, 25); lv_obj_set_size(a, 244, 16);
         lv_obj_set_style_text_font(a, TF(USER_14), 0);
         lv_obj_set_style_text_color(a, TC(TEXT_SECONDARY), 0);
+        indic_row_fit(row, t, a);
     }
     if(n > MAX_RESULTS){    /* genuinely truncated - tell the user to narrow down */
-        lv_obj_t *f = lv_label_create(g_results);
+        lv_obj_t *f = indic_label_create(g_results);
         lv_label_set_text(f, "Showing first 80 - refine to narrow");
         lv_obj_set_style_text_color(f, TC(TEXT_MUTED), 0);
         lv_obj_set_style_text_font(f, TF(UI_14), 0);
@@ -147,7 +150,7 @@ void search_create(lv_obj_t *root){
     lv_obj_set_style_bg_color(g_bar, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(g_bar, LV_OPA_COVER, 0);
     ui_on(g_bar, bar_cb, LV_EVENT_CLICKED, NULL, "search.bar", UI_CORE);
-    g_bar_lbl = lv_label_create(g_bar);
+    g_bar_lbl = indic_label_create(g_bar);
     lv_label_set_text(g_bar_lbl, "Search library");
     lv_label_set_long_mode(g_bar_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_size(g_bar_lbl, 100, 18);   /* fixed height = ONE line: LONG_DOT truncates instead of wrapping */
@@ -170,14 +173,14 @@ void search_create(lv_obj_t *root){
     lv_obj_set_style_bg_color(g_clear, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(g_clear, LV_OPA_70, LV_STATE_PRESSED);
     ui_on(g_clear, clear_cb, LV_EVENT_CLICKED, NULL, "search.clear", UI_CORE);
-    lv_obj_t *ci = lv_label_create(g_clear);
+    lv_obj_t *ci = indic_label_create(g_clear);
     lv_label_set_text(ci, LV_SYMBOL_CLOSE);
     lv_obj_set_style_text_color(ci, TC(TEXT_SECONDARY), 0);
     lv_obj_center(ci);
     lv_obj_add_flag(g_clear, LV_OBJ_FLAG_HIDDEN);
 
     /* sub-hint under the centred field (empty state only) */
-    g_hint = lv_label_create(root);
+    g_hint = indic_label_create(root);
     lv_label_set_text(g_hint, "Songs, artists, albums");
     lv_obj_set_style_text_font(g_hint, TF(UI_14), 0);
     lv_obj_set_style_text_color(g_hint, TC(TEXT_DISABLED), 0);
@@ -198,6 +201,10 @@ void search_create(lv_obj_t *root){
 
     search_layout(g_query[0] != 0);   /* centred empty state on first entry */
     rebuild(g_query);
+}
+
+void search_refresh(void){
+    if(g_results) rebuild(g_query);
 }
 
 lv_obj_t *search_scroller(void){ return g_results; }

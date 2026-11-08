@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
+#include "indic.h"
 #include "screens.h"
 #include "theme.h"
 #include "theme_kit.h"
@@ -67,11 +68,16 @@ static lv_obj_t *menu_row(lv_obj_t *list, const char *text, lv_event_cb_t cb, vo
     lv_obj_set_style_bg_color(r, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
     lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
     ui_on(r, cb, LV_EVENT_CLICKED, ud, "npmenus.cb", UI_CORE);
-    lv_obj_t *l = lv_label_create(r);
+    lv_obj_t *l = indic_label_create(r);
     lv_label_set_text(l, tr(text));
     lv_obj_set_pos(l, 16, 16);
     lv_obj_set_style_text_font(l, TF(USER_16), 0);   /* rows carry playlist names: chain (issue #3) */
     lv_obj_set_style_text_color(l, TC(TEXT_PRIMARY), 0);
+    if(indic_text(text)) {
+        lv_obj_set_size(l, 236, indic_line_height(text, lv_obj_get_style_text_font(l, 0)));
+        lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+        indic_row_fit(r, l, NULL);
+    }
     return r;
 }
 
@@ -129,7 +135,7 @@ static void ctx_addpl_cb(lv_event_t *e){
     track_state_t raw, now; ipc_get_state(&raw); playback_display_state(&now, &raw);   /* 15b: the Cast track (pos_id 0) while casting, else raw */
     if(now.have_track && strcmp(now.path, g_path) == 0) g_pos_id = now.pos_id; else g_pos_id = 0;
     plpick_set_song(g_path, g_pos_id, now.have_track ? now.title : "");   /* add the current track (just that CUE/ISO track if it is one) */
-    plpick_reload();                  /* refresh list + clear any old toast */
+    plpick_reload();                  /* refresh the playlist list */
     screen_show(SCR_PLPICK);
 }
 static void ctx_fav_cb(lv_event_t *e){
@@ -161,7 +167,6 @@ static int  g_pick_unsure;   /* a CUE/ISO file whose playing track could not be 
 static char g_pick_col[8], g_pick_val[MDB_STR];
 static int *g_pick_ids, g_pick_nids;   /* or exactly these SONG.IDs (set by plpick_set_ids) */
 static lv_obj_t *g_pick_list;
-static lv_obj_t *g_pick_toast;
 void plpick_set_song(const char *path, int pos_id, const char *title){
     snprintf(g_pick_path, sizeof g_pick_path, "%s", path?path:"");
     g_pick_col[0] = g_pick_val[0] = 0; free(g_pick_ids); g_pick_ids = NULL; g_pick_nids = 0;
@@ -176,7 +181,7 @@ void plpick_set_group(const char *col, const char *val){
     g_pick_path[0] = 0; g_pick_sub = 0; g_pick_unsure = 0; free(g_pick_ids); g_pick_ids = NULL; g_pick_nids = 0;
     snprintf(g_pick_col, sizeof g_pick_col, "%s", col?col:"");
     snprintf(g_pick_val, sizeof g_pick_val, "%s", val?val:"");
-    plpick_reload();                  /* refresh list + clear any old toast (the caller then shows SCR_PLPICK) */
+    plpick_reload();                  /* refresh the playlist list (the caller then shows SCR_PLPICK) */
 }
 void plpick_set_ids(const int *ids, int n){
     free(g_pick_ids); g_pick_ids = NULL; g_pick_nids = 0;
@@ -202,31 +207,17 @@ static int pick_add_to(long pid){
     return mdb_playlist_add_group(pid, g_pick_col, g_pick_val);
 }
 
-static lv_timer_t *g_pick_timer;
-static void pick_toast_hide_cb(lv_timer_t *t){
-    if(g_pick_toast) lv_obj_add_flag(g_pick_toast, LV_OBJ_FLAG_HIDDEN);
-    lv_timer_delete(t);
-    g_pick_timer = NULL;
-}
-static void pick_toast(const char *msg){
-    if(!g_pick_toast) return;
-    lv_label_set_text(lv_obj_get_child(g_pick_toast,0), msg);
-    lv_obj_clear_flag(g_pick_toast, LV_OBJ_FLAG_HIDDEN);
-    /* auto-dismiss after 2.2s (one-shot: the cb deletes the timer) */
-    if(g_pick_timer) lv_timer_delete(g_pick_timer);
-    g_pick_timer = lv_timer_create(pick_toast_hide_cb, 2200, NULL);
-}
 /* 1 (after a toast) when the pending song is an unidentified track of a CUE/ISO file */
 static int pick_refuse_unsure(void){
     if(!g_pick_unsure) return 0;
-    pick_toast("Couldn't identify this track - try again while it plays");
+    ui_toast("Couldn't identify this track - try again while it plays");
     return 1;
 }
 static void pick_added_toast(int n, const char *one, const char *fail){
-    if(n<0){ pick_toast("Couldn't add - try again"); return; }
-    if(g_pick_path[0]){ pick_toast(n ? one : fail); return; }
-    if(n > 0){ char m[40]; snprintf(m, sizeof m, "Added %d songs", n); pick_toast(m); }
-    else pick_toast("Nothing new to add");
+    if(n<0){ ui_toast("Couldn't add - try again"); return; }
+    if(g_pick_path[0]){ ui_toast(n ? one : fail); return; }
+    if(n > 0){ char m[40]; snprintf(m, sizeof m, "Added %d songs", n); ui_toast(m); }
+    else ui_toast("Nothing new to add");
 }
 /* duplicate-confirm dialog */
 static lv_obj_t *g_dup_dlg;
@@ -240,9 +231,9 @@ static void dup_add_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
     /* "Add anyway" on a KNOWN duplicate: the song is in the playlist either way, so
      * "Kept in playlist" is accurate; only invalidate the scope if the row actually changed. */
-    if(g_pick_path[0] && pick_add_to(g_dup_pid)<0){ pick_toast("Couldn't add - try again"); return; }
+    if(g_pick_path[0] && pick_add_to(g_dup_pid)<0){ ui_toast("Couldn't add - try again"); return; }
     dup_close();
-    pick_toast("Kept in playlist");
+    ui_toast("Kept in playlist");
 }
 static void dup_cancel_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) dup_close(); }
 static lv_obj_t *dlg_btn(lv_obj_t *p, int y, const char *txt, lv_color_t bg, lv_color_t fg, lv_event_cb_t cb){
@@ -305,15 +296,13 @@ static void pick_newname_done(const char *name){
         int n = pick_add_to(pid);
         pick_added_toast(n, "Created + added", "Created (song not added)");
     } else
-        pick_toast("Playlist created");
+        ui_toast("Playlist created");
 }
 static void pick_new_cb(lv_event_t *e){
     if(lv_event_get_code(e)==LV_EVENT_CLICKED) kbinput_open_validated("Playlist name", "", pick_newname_done, pick_new_save);
 }
 static void plpick_reload_read(void){
     if(!g_pick_list) return;
-    if(g_pick_timer){ lv_timer_delete(g_pick_timer); g_pick_timer = NULL; }
-    if(g_pick_toast) lv_obj_add_flag(g_pick_toast, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clean(g_pick_list);
     menu_row(g_pick_list, LV_SYMBOL_PLUS "  New Playlist", pick_new_cb, NULL);
     /* size to the real playlist count (no 64 cap). pick_add_cb takes the id by value, so
@@ -335,19 +324,6 @@ static void plpick_reload(void){
 void plpick_create(lv_obj_t *root){
     panel_header(root, "Add to Playlist");
     g_pick_list = panel_list(root);
-    /* a small confirmation toast */
-    g_pick_toast = lv_obj_create(root);
-    lv_obj_remove_style_all(g_pick_toast);
-    lv_obj_set_size(g_pick_toast, 220, 36);
-    lv_obj_align(g_pick_toast, LV_ALIGN_BOTTOM_MID, 0, -18);
-    lv_obj_set_style_radius(g_pick_toast, 18, 0);
-    lv_obj_set_style_bg_color(g_pick_toast, TC(SURFACE_RAISED), 0);
-    lv_obj_set_style_bg_opa(g_pick_toast, LV_OPA_COVER, 0);
-    lv_obj_t *tl = lv_label_create(g_pick_toast);
-    lv_obj_set_style_text_color(tl, TC(TEXT_PRIMARY), 0);
-    lv_obj_set_style_text_font(tl, TF(UI_14), 0);
-    lv_obj_center(tl);
-    lv_obj_add_flag(g_pick_toast, LV_OBJ_FLAG_HIDDEN);
     plpick_reload();
 }
 

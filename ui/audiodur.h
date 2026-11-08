@@ -376,13 +376,13 @@ static void ad_put_le32(unsigned char *p, uint32_t v){
     for(unsigned i=0;i<4;i++) p[i]=(unsigned char)(v>>(8*i));
 }
 static int ad_comment_wanted(const unsigned char *p, unsigned n){
-    static const char *const keys[]={"TITLE=","ARTIST=","ALBUM=","GENRE=","ALBUMARTIST=","ALBUM ARTIST=","TRACKNUMBER=","DISCNUMBER="};
+    static const char *const keys[]={"TITLE=","ARTIST=","ALBUM=","GENRE=","ALBUMARTIST=","ALBUM ARTIST=","TRACKNUMBER=","DISCNUMBER=","ARTISTSORT=","ALBUMARTISTSORT=","ALBUMSORT="};
     for(unsigned k=0;k<sizeof keys/sizeof keys[0];k++){
         unsigned len=(unsigned)strlen(keys[k]);
         if(n<len) continue;
         unsigned i=0;
         while(i<len && (p[i]|32)==((unsigned char)keys[k][i]|32)) i++;
-        if(i==len) return 1;
+        if(i==len) return k>=8 ? 2 : 1;   /* 2: a bounded sort scalar */
     }
     return 0;
 }
@@ -420,7 +420,9 @@ static int ad_comment_feed(ad_comment_stream *c, unsigned char *out,
                 memcpy(c->field+c->have,p,copy); c->have+=copy;
                 c->left-=copy; p+=copy; n-=copy;
                 if(c->left && c->have<sizeof c->field) continue;
-                c->selected=ad_comment_wanted(c->field,c->have) ? 2 : 1;
+                unsigned wanted=ad_comment_wanted(c->field,c->have);
+                /* Validate the full stream, but never retain an oversized sort scalar. */
+                c->selected=wanted && !(wanted==2 && c->size>1024) ? 2 : 1;
                 if(c->selected==2){
                     if(c->used>1024*1024-4 || c->size>1024*1024-c->used-4) return AD_DEFERRED;
                     ad_put_le32(out+c->used,c->size); c->used+=4;

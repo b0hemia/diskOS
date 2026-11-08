@@ -30,6 +30,7 @@ const char *fw_gain_tag(void);
 
 /* True where the Custom EQ editor may write + select its USER PEQ slots (see fwcaps.c); false = view-only. */
 int fw_custom_peq_writable(void);
+int fw_peq_band_edit(void);   /* V2.57 single-control commands + authoritative DB readback */
 
 /* True where the stock player turns Wi-Fi off at boot when both radios were saved on (V2.57 only). */
 int fw_has_radio_boot_arbitration(void);

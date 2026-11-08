@@ -3,4 +3,5 @@
 #define DISKOS_WIFI_H
 /* UI-thread snapshot, no commands or file reads: 1 connected, 0 offline, -1 not known yet. */
 int wifi_connectivity(void);
+int wifi_prepare_reload(void);
 #endif

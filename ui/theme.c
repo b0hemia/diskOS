@@ -2,6 +2,7 @@
 /* Copyright (C) 2026 diskOS contributors */
 /* theme.c - the active theme's palette. Stage 1: only the default dark theme, whose values are exactly the colours
  * the UI used before roles existed (so it renders pixel-identically). The only lv_color_hex() calls in the app. */
+#include "indic.h"
 #include "theme.h"
 #include "theme_kit.h"
 #include "screens.h"   /* ui_font_cjk: the CJK-capable user-text chains (built in ui.c) */
@@ -229,6 +230,7 @@ const lv_font_t *theme_font_chain(const theme_def_t *d, int r, lv_font_t *tf, lv
     if(!d || r < 0 || r >= THEME_FONT_COUNT || !d->font[r].face) return NULL;
     int px = d->font[r].px;
     *tf = *d->font[r].face;
+    indic_font_register(tf, px);
     if(r == THEME_FONT_ICON_20 || r == THEME_FONT_ICON_28) return tf;
     /* Standard text sizes keep the Montserrat/intl head for missing symbols.
      * Special face sizes have no Montserrat peer, so use TTC then compiled CJK. */
@@ -302,6 +304,9 @@ static int g_outdoor;   /* Outdoor mode was on at startup */
  * the UI, so the palette never changes under live objects). Outdoor mode forces the light variant. */
 static void theme_install_lvgl(void);
 void theme_init(void){
+    static const int text_px[] = {10,12,14,16,18,20,22,24,28,32,36,40};
+    for(unsigned i = 0; i < sizeof text_px / sizeof text_px[0]; i++)
+        indic_font_register(theme_font_base(text_px[i]), text_px[i]);
     int outdoor = cfg_get_int("outdoor", 0) == 1;
     g_outdoor = outdoor;
     g_variant = (outdoor || cfg_get_int("theme_variant", 0) == 1) ? 1 : 0;
