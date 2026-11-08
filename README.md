@@ -67,7 +67,10 @@
 
 - [Now Playing](docs/TOUR.md#now-playing) puts music controls on the round display.
 - Ogg Opus files (.opus, .oga, and .ogg) are indexed with tags and available lengths
-  and played through the stock player.
+  and played through the stock player. WAV files show their title, artist, album, genre and
+  track tags after a rescan.
+- Gurmukhi and Devanagari names are shaped correctly, and Urdu and Hebrew names read right
+  to left.
 - Home's now-playing border shows playback progress in the halo theme.
 - Beam plays the Disc's music on Cast and AirPlay speakers and TVs on your Wi-Fi, from the
   Beam button on Now Playing, the Options page or an optional Quick Settings tile.
@@ -77,6 +80,8 @@
 - [Up Next](docs/TOUR.md#up-next) shows the player's queue and lets you jump within it.
 - [Lyrics and Song Info](docs/TOUR.md#song-info-and-lyrics) show words and available file details.
 - [Library and cover flow](docs/TOUR.md#library) offer several ways to browse indexed music.
+  Artist, album artist and album sort tags set the order after a rescan, and featured artists
+  ("feat.", "ft.") get their own Artists entry.
 - [Playlists, favourites, and books](docs/TOUR.md#playlists) keep different listening collections close.
 - [Themes and display choices](docs/TOUR.md#eight-themes) change the look of the interface.
 
@@ -218,13 +223,13 @@ Some mono FLAC, MP3, and Opus files can play slowed down in the stock player. No
 may still retain the old track after a mono Opus file advances into another mono Opus file.
 The stock player and connected headphones also affect some audio and Bluetooth choices.
 Browse Files plays ordinary indexed audio files through the all-songs queue rather than a folder queue. On V2.09,
-playlist and book playback may fail; on V2.57, the Custom EQ editor is view-only.
+playlist and book playback may fail; on V2.57, Custom EQ edits the ten-band USER presets, and
+advanced parametric presets stay view-only.
 Beam to Cast supports MP3, AAC, Opus, Ogg Vorbis, and 16- or 24-bit FLAC and PCM WAV up to 96
 kHz, in mono or stereo. Google Home Mini receivers accept FLAC up to 48 kHz. AirPlay decodes
 mono or stereo MP3, FLAC and PCM WAV at 8-384 kHz and converts AAC, ALAC, Opus, Ogg Vorbis, WMA,
 APE and DSD. Unsupported files, CUE tracks and audiobooks cannot be beamed. See the [Beam
-guide](docs/TOUR.md#beam) for controls and limits. Hebrew letters show, but right-to-left
-ordering is not corrected.
+guide](docs/TOUR.md#beam) for controls and limits.
 Read the [tour's limits](docs/TOUR.md#limits) and [privacy disclosure](docs/PRIVACY.md).
 This project is not affiliated with or endorsed by FiiO, Snowsky, or Ingenic.
 

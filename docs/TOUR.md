@@ -64,7 +64,7 @@ Swipe right from the left edge to go Back one page. Swipe up from the bottom edg
 
 ### Screensaver and screen off
 
-After the Screensaver delay, the screen enters idle dimming; Cover and Vinyl savers open automatically only during playback. Vinyl with a cover keeps your chosen brightness. The Screen Off delay then turns the panel fully off unless set to Off. Choose Cover, Analog, Minimal, Digital, Vinyl, or Custom under Saver Style, which opens a list of choices. Set Screensaver to Off to disable both automatic idle stages. Touch wakes diskOS idle dimming and Screen Off; use the power button if the stock player put the panel to sleep.
+After the Screensaver delay, the screen enters idle dimming; Cover and Vinyl savers open automatically only during playback. Vinyl with a cover keeps your chosen brightness. The Screen Off delay then turns the panel fully off unless set to Off. Choose Cover, Analog, Minimal, Digital, Vinyl, or Custom under Saver Style, which opens a list of choices. Set Screensaver to Off to skip the saver and dimming stage; Screen Off still turns the panel off at its own delay. Touch wakes diskOS idle dimming and Screen Off; use the power button if the stock player put the panel to sleep.
 
 Song text appears while playing and hides when paused; optional weather appears where the style has room. The smaller, raised Analog dial leaves room for song text. Vinyl hides song labels while showing a spinning cover, but keeps text when no cover is available. Titles and artists refresh between tracks from a CUE sheet or SACD ISO, even when their file path is shared.
 
@@ -166,7 +166,7 @@ Lyrics first looks for a local .lrc beside the song, then lyrics embedded in its
 
 ### Equalizer
 
-The Equalizer row offers Off, Jazz, Rock, R&B, Hip-Hop, Pop, Dance, Classical, Retro, Sibilance 1 and 2, and USER1 through USER10. Custom EQ shows ten fixed bands from 32 Hz to 16 kHz plus a master level; choose a USER slot, scroll sideways to reach more bands, and drag its sliders within -12 to +12 dB. The controls leave space for longer fitted page titles. If a slot cannot be read, the previous curve and slot stay visible; editing is refused until a successful read. Retry the slot selection. On firmware where the stock curve can be written, changes save to that slot and are sent to the player. On V2.57 the Custom EQ editor is view-only: sliders are dimmed, and tapping a band explains "Not on this firmware".
+The Equalizer row offers Off, Jazz, Rock, R&B, Hip-Hop, Pop, Dance, Classical, Retro, Sibilance 1 and 2, and USER1 through USER10. Custom EQ shows ten fixed bands from 32 Hz to 16 kHz plus a master level; choose a USER slot, scroll sideways to reach more bands, and drag its sliders within -12 to +12 dB. The controls leave space for longer fitted page titles. If a slot cannot be read, the previous curve and slot stay visible; editing is refused until a successful read. Retry the slot selection. On firmware where the stock curve can be written, changes save to that slot and are sent to the player. On V2.57 the editor works like the stock one: each change edits one band of a ten-band USER preset, keeps the other bands and their Q values, and the saved row is read back after each change. Advanced parametric presets made elsewhere stay view-only.
 
 <table>
 <tr>
@@ -180,9 +180,9 @@ The Equalizer row offers Off, Jazz, Rock, R&B, Hip-Hop, Pop, Dance, Classical, R
 
 Library opens Songs, Albums, Artists, Genres, Playlists, Favourites, Folders, Books, and History. History contains Most Played and Recently Played. Tap a category and then an item to open its next level; tap a song to play it, or use Play and Shuffle at the top of a song list. Hold an album, artist, or genre row to play its songs, and use the Add to Playlist row inside an album, artist, or genre song list to add that displayed group. Drag along the outer edge to scroll a long list, or tap the A-Z control and a letter to jump; the left-edge right swipe remains Back.
 
-Songs is the complete indexed music list. Artists and Genres open a list of their albums plus All Songs, while Albums opens an album's cover and tracks. Album View can switch the Albums list to Cover Flow: flick or drag the covers, use the rim to move through them, tap the centered album to open its tracks, or hold it to play the album. A cover wall can show placeholders until artwork has been cached; playing a track with art can fill that cache.
+Songs is the complete indexed music list. Artists and Genres open a list of their albums plus All Songs, while Albums opens an album's cover and tracks. Album View can switch the Albums list to Cover Flow: flick or drag the covers, use the rim to move through them, tap the centered album to open its tracks, or hold it to play the album. Cover Flow loads the covers it shows; until a cover is ready it shows a placeholder. Album Art Cache can also prepare covers in the background.
 
-Missing or blank artist tags appear together under "Unknown artist"; open or play that group to find its songs. Returning from Now Playing to the top-level Songs, Albums, Artists, or Genres lists no longer reloads them. Back and returns from another screen restore the list position with the opened item in view. After a rescan, Cover Flow removes deleted albums and retries a failed reload.
+Artist, album artist and album sort tags set the order of Artists, Albums, A-Z and Cover Flow after a rescan; the names shown do not change. Missing or blank artist tags appear together under "Unknown artist"; open or play that group to find its songs. Returning from Now Playing to the top-level Songs, Albums, Artists, or Genres lists no longer reloads them. Back and returns from another screen restore the list position with the opened item in view. After a rescan, Cover Flow removes deleted albums and retries a failed reload.
 
 <table>
 <tr>
@@ -291,7 +291,7 @@ Audio controls equalization, DAC options and output limits. SPDIF Output is avai
 | DAC Filter | Slow LL by default; choose Fast LL, Slow PC, Fast PC, NOS, or Wideband. |
 | ReplayGain | Off by default; choose Track or Album leveling. |
 | DRE | On by default; switch the player's Dynamic Range Enhancement on or off. |
-| Gapless | Off by default; switch gapless playback on or off. |
+| Gapless | Follows the stock setting until you choose here; switch gapless playback on or off. |
 
 #### Output limits
 
@@ -346,7 +346,7 @@ Display controls appearance and idle behavior. Changing theme or text size redra
 
 | Row | Action and default |
 |---|---|
-| Screensaver | 1 min by default; choose Off, 30 sec, 1 min, 2 min, or 5 min. Off disables both automatic idle stages. |
+| Screensaver | 1 min by default; choose Off, 30 sec, 1 min, 2 min, or 5 min. Off skips the saver and dimming; Screen Off still applies. |
 | Saver Style | Cover by default; open Cover, Analog, Minimal, Digital, Vinyl, or Custom. Custom opens image and overlay choices described under Screensaver and screen off. |
 | Screen Off | 2 min by default; choose Off, 30 sec, 1 min, 2 min, or 5 min. |
 
@@ -356,7 +356,7 @@ Display controls appearance and idle behavior. Changing theme or text size redra
 
 | Row | Action and default |
 |---|---|
-| Artists | By Artist by default; By Album Artist uses album-artist tags. Unsupported firmware says "Not on this firmware". |
+| Artists | By Artist by default, where featured artists ("feat.", "ft.", "featuring") get their own entry; By Album Artist uses album-artist tags as written. Unsupported firmware says "Not on this firmware". |
 | Track Numbers | Off by default; show numbers in album song lists. |
 | Album View | List by default; choose List or Cover Flow for Albums. |
 
@@ -365,7 +365,7 @@ Display controls appearance and idle behavior. Changing theme or text size redra
 | Row | Action and default |
 |---|---|
 | Online Album Art | Off by default; look up a missing album cover over Wi-Fi. |
-| Album Art Cache | Covers only by default; optional background decoding When Idle or Idle & Charging. |
+| Album Art Cache | Covers only by default; optional background preparation When Idle or Idle & Charging. Covers share one cache on the card of up to 4 GiB that always leaves 1 GiB free; identical pictures are stored once, and older covers not on screen are removed when space is needed. |
 | Online Lyrics | On by default; permit lookup of missing words over Wi-Fi. |
 
 #### Maintenance
@@ -373,7 +373,7 @@ Display controls appearance and idle behavior. Changing theme or text size redra
 | Row | Action and default |
 |---|---|
 | Tag Encoding | Auto by default: guess legacy Cyrillic (CP1251) tags and CUE-sheet text. Western keeps the previous decoding; Cyrillic reads legacy text as CP1251. Use Rescan Library after changing the choice to apply it to existing songs; valid UTF-8 and UTF-16 tags are unchanged. |
-| Rescan Library | Scan the card with progress shown; tap Stop to cancel pending scan changes. |
+| Rescan Library | Scan the card with progress shown; tap Stop to cancel pending scan changes. Until sort tags have been read once this row reads "Rescan for sort tags"; a rescan also reads WAV tags. |
 | Import Playlists | Import recognized .m3u and .m3u8 lists from the card. |
 
 ### Settings: Controls
@@ -440,7 +440,7 @@ The page opens with a battery summary with each reading on its own line: charge 
 
 Display > Theme has eight built-in themes; each also has a Dark and Light appearance. Tap a theme name to apply it and use Appearance to switch its variant. The theme changes fonts, colors, and layouts, while the available music and settings actions stay the same. The Now Playing screenshots above show the most visible layout differences.
 
-Chinese, Japanese, and Korean names and titles use the stock font fallback across themes and text sizes. Zine and something retain their title faces for Latin-1 accented letters; zine also covers Cyrillic U+0400-U+045F in its own face. Theme case styling handles Latin-1, Latin Extended-A, and Cyrillic U+0400-U+045F letter pairs.
+Chinese, Japanese, and Korean names and titles use the stock font fallback across themes and text sizes. Gurmukhi, Devanagari, Urdu and Hebrew names use embedded Noto faces: Gurmukhi and Devanagari are shaped correctly, and Urdu and Hebrew read right to left. Zine and something retain their title faces for Latin-1 accented letters; zine also covers Cyrillic U+0400-U+045F in its own face. Theme case styling handles Latin-1, Latin Extended-A, and Cyrillic U+0400-U+045F letter pairs.
 
 | Theme | What changes |
 |---|---|
@@ -472,7 +472,7 @@ Wi-Fi allows up to 75 seconds for a connection. Network details refresh as it co
 
 Swipe left from Home to Apps, then tap Last.fm, Settings, or an installed external app. An external app takes over the screen and touch input while it runs; its behavior depends on that app. Last.fm setup shows a QR code for entering your own API key and secret on a phone, then a second authorization step; after connection, toggle Scrobbling or tap Disconnect. Failed account or session setting saves are retried. Cast listening can scrobble; AirPlay sending and receiving do not. It is Off until you set it up; the setup page uses plain HTTP on your local Wi-Fi.
 
-With Weather on Home enabled, tap the glance to open Weather. "Weather unavailable" is tappable too, so you can set the location before a reading is available. In Weather, choose a location manually or request automatic location. Weather depends on Wi-Fi and the remote service.
+With Weather on Home enabled, tap the glance to open Weather. "Weather unavailable" is tappable too, so you can set the location before a reading is available. In Weather, choose a location manually or request automatic location. Weather shows when it last updated, and Refresh asks for a new reading. A failed or invalid reading keeps the last good one. Weather depends on Wi-Fi and the remote service, and starts no new fetch while it is off.
 
 <table>
 <tr>
@@ -526,8 +526,6 @@ On V2.57, Wi-Fi can still be delayed or turned off after a restart when Bluetoot
 If Wi-Fi is off, turn it on in Settings > Network > Wi-Fi; if it shows no IP, reconnect there.
 
 Beam: Cast and AirPlay receivers must be on the same Wi-Fi and may not appear on guest networks. Format limits are listed under Beam. Cast control messages are encrypted, but the Disc does not check the receiver's identity. Music and artwork are sent over plain HTTP on your local network. Use a network you trust.
-Hebrew letters show in Library and Now Playing; right-to-left ordering is not corrected.
-
 ### Safety and stock UI
 
 Settings > Device > Default UI > Stock makes the stock interface the normal boot choice. To use the other interface for one boot, hold Volume Up from power-on until it appears; keep holding long enough for the switch to register. Both choices leave the diskOS image installed. To remove that image, the desktop installer restores a validated saved stock image or rebuilds one using **Get firmware** or **Browse...**. See [restore and recovery](INSTALL.md#restore-stock-and-recover) and [Get firmware](INSTALL.md#get-firmware).

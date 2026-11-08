@@ -256,7 +256,7 @@ will not boot. Follow [RECOVERY.txt](../RECOVERY.txt), also included in the Wind
 | E101 | The host, runtime or build does not support flashing. Use the public flash-enabled 1.2.2 Windows ZIP on native Windows x64. Source runs and disabled builds are not the public flashing package; use Linux if your host is unsupported. |
 | E102 | A required bundled component is missing. Obtain the complete matching installer package; keep its files together. Keep the log if it still fails. |
 | E103 | A native tool could not start. Follow the message: use an executable filesystem, supply the required libraries, or rebuild the matching tools. |
-| E104 | The image tools lack required compression or archive support. Use the complete matching package; report the error if it persists. |
+| E104 | The image tools lack required compression or archive support. On Linux, if the bundled tools fail this check, the installer checks a complete pair of system `mksquashfs` and `unsquashfs` from `PATH` the same way and uses them; installing squashfs-tools with LZO support fixes it there. Otherwise use the complete matching package; report the error if it persists. |
 | E105 | A required firmware-decryption component cannot load. For a standalone app, obtain the complete package again. For a source run, install `requirements.txt` in the Python environment running the installer. |
 | E106 | macOS could not safely prepare its bundled tools. Move the app to a writable folder and reopen it; if still blocked, download and extract a fresh complete release. |
 | E110 | No connected Disc was found in mask-ROM mode. Power it off, hold **Volume Down**, and connect USB; the screen stays black. |

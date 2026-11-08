@@ -161,8 +161,10 @@ The player loads bands -> computes coeffs @0x448144 -> runs the cascade
 ### Custom EQ in diskOS
 `eqcustom.c` provides a 10-band editor with horizontal scrolling. `mdb_set_peq()` writes
 user slots 11-20, and `ui_apply_eq()` sends `0689` to select a slot. Editing is enabled
-on V2.09, V2.28, and V2.40. On V2.57 it is view-only: that player's PEQ loader can
-reject and repair bands above half its internal processing rate.
+on V2.09, V2.28, and V2.40. On V2.57 (from diskOS 1.2.3) editing works like the stock
+editor: each change is sent to the player as a one-band (or master, or Flat) command and
+the saved row is read back afterwards, so the player's own loader keeps every band valid.
+Advanced parametric presets made elsewhere stay view-only.
 
 <a id="captured-params_json-format-live-v209-2026-06-30"></a>
 

@@ -95,6 +95,9 @@ Hand-deployed binaries revert to the selected signed update or flashed build on 
 takes about 20 minutes. The installer prompts for confirmation before it writes; add `-y` only when you
 deliberately want to skip that prompt (for example in a script), since it rewrites the root filesystem.
 
+On Linux, if the bundled squashfs tools fail their capability check, the installer checks a complete
+system pair from `PATH` the same way and uses it; bundled and system tools are never mixed.
+
 ### macOS note
 
 The installer prefers host-native tools under `vendor/<host-tag>/` (for example
