@@ -22,7 +22,7 @@ class GuiOtaTests(unittest.TestCase):
         cfg = imagebuild.resolve_ota_config(**gui.ota_params(True, True))
         self.assertIsNotNone(cfg)
         self.assertEqual(cfg["epochs"],
-                         b"MIN_KEY_EPOCH=1\nMIN_UI_EPOCH=7\n")
+                         b"MIN_KEY_EPOCH=1\nMIN_UI_EPOCH=8\n")
 
     def test_ticked_with_key_means_ota_on(self):
         self.assertEqual(gui.ota_params(True, True), {"no_ota": False})

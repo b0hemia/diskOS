@@ -660,7 +660,7 @@ def _patch_fiio_init(path, rep):
 OTA_DIR = "etc/diskos-ota"
 DEFAULT_MIN_KEY_EPOCH = 1
 # Match the UI release epoch shipped by this installer.
-DEFAULT_MIN_UI_EPOCH = 7
+DEFAULT_MIN_UI_EPOCH = 8
 _P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")   # SubjectPublicKeyInfo, id-ecPublicKey/prime256v1, uncompressed point
 _OTA_FILES = (("root.pub.pem", 0o644), ("epochs", 0o644), ("diskos-verify.sh", 0o644))
 
