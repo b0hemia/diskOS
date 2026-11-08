@@ -9,4 +9,4 @@ installs the two pip dependencies (pyusb, pycryptodome), then ``./diskos-install
 runs it. The GUI additionally needs the system's Tk; the flash step needs libusb-1.0.
 """
 
-__version__ = "1.2.2"
+__version__ = "1.2.3"
