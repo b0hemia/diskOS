@@ -1,4 +1,4 @@
-# Install diskOS 1.2.2
+# Install diskOS 1.2.3
 
 [Home](../README.md) | [Tour](TOUR.md) | [Privacy](PRIVACY.md)
 
@@ -122,7 +122,7 @@ After setup, run commands through `./diskos-installer`; it selects the local env
      from Debug Mode in the UI.
    - **Dev** (under **Advanced**): adds a passwordless USB-serial root shell on every boot. Use this only on a dedicated
      development device you control.
-   - **Allow diskOS updates over Wi-Fi:** checked by default in the 1.2.2 release package, which
+   - **Allow diskOS updates over Wi-Fi:** checked by default in the 1.2.3 release package, which
      includes the diskOS release key. Untick it to leave the key out. The box is disabled if a
      package has no key. Updates still require a tap on the Disc and accept only signed app bundles.
 3. Power the Disc off. Hold **Volume Down** and plug in USB to enter mask-ROM mode. The screen stays
@@ -253,7 +253,7 @@ will not boot. Follow [RECOVERY.txt](../RECOVERY.txt), also included in the Wind
 
 | Code | What to do |
 |---|---|
-| E101 | The host, runtime or build does not support flashing. Use the public flash-enabled 1.2.2 Windows ZIP on native Windows x64. Source runs and disabled builds are not the public flashing package; use Linux if your host is unsupported. |
+| E101 | The host, runtime or build does not support flashing. Use the public flash-enabled 1.2.3 Windows ZIP on native Windows x64. Source runs and disabled builds are not the public flashing package; use Linux if your host is unsupported. |
 | E102 | A required bundled component is missing. Obtain the complete matching installer package; keep its files together. Keep the log if it still fails. |
 | E103 | A native tool could not start. Follow the message: use an executable filesystem, supply the required libraries, or rebuild the matching tools. |
 | E104 | The image tools lack required compression or archive support. On Linux, if the bundled tools fail this check, the installer checks a complete pair of system `mksquashfs` and `unsquashfs` from `PATH` the same way and uses them; installing squashfs-tools with LZO support fixes it there. Otherwise use the complete matching package; report the error if it persists. |
@@ -339,7 +339,7 @@ saved stock image first. The installer accepts only unmodified official V2.09, V
 V2.57 firmware. Before writing, it checks that the Disc's kernel and recovery match the selected
 firmware. The saved stock image remains available for restore.
 
-The 1.2.2 release image includes the diskOS release key by default.
+The 1.2.3 release image includes the diskOS release key by default.
 Settings > Device > Update diskOS checks for a newer signed release and updates only the diskOS app,
 not stock firmware or the whole flashed image. After a trial update, choose Keep or Go back;
 a broken update rolls back automatically. Settings > Device > Allow diskOS Updates can stop
@@ -351,7 +351,7 @@ on this install". Untick the GUI checkbox when flashing or use `--no-ota` to lea
 
 The installer can flash an older diskOS release, or your own build of the UI (`--ui PATH`), on top
 of supported stock firmware. The in-app update path is designed to accept only newer releases
-signed by the key in the image. A full flash with the complete 1.2.2 installer clears downloaded app updates and starts
+signed by the key in the image. A full flash with the complete 1.2.3 installer clears downloaded app updates and starts
 the UI included in that installer or supplied with `--ui`. Settings and music are kept.
 Older installers may retain a newer accepted app update, which can run at the next boot.
 
@@ -367,7 +367,7 @@ Choose how the image treats over-the-air updates when you build it:
 - `--ota-key PATH` bakes your own public key (PEM, ECDSA P-256). That image accepts only updates
   you sign with the matching private key. A private key is refused.
 - With neither option the installer uses `DISKOS_OTA_ROOTPUB` or a bundled key if one exists.
-  The 1.2.2 release package bundles the diskOS release key; a source checkout without a key
+  The 1.2.3 release package bundles the diskOS release key; a source checkout without a key
   builds without updates. `./diskos-installer doctor` and the confirmation before flashing both
   say which state the image will have.
 
@@ -379,7 +379,7 @@ when a new playlist is created. Keep a copy of important playlists before downgr
 
 - **Linux x86-64:** supported.
 - **macOS, Apple Silicon:** use the self-contained release app; no separate runtime or tool installation.
-- **Windows 10/11 x64:** use the complete flash-enabled 1.2.2 release ZIP. It includes the runtime and native tools; only Disc driver setup asks for administrator approval. Source runs require a development opt-in to flash; use the release ZIP for normal installation.
+- **Windows 10/11 x64:** use the complete flash-enabled 1.2.3 release ZIP. It includes the runtime and native tools; only Disc driver setup asks for administrator approval. Source runs require a development opt-in to flash; use the release ZIP for normal installation.
 - **macOS, Intel:** build the native tools with `vendor/setup-macos.sh` (Homebrew build dependencies required).
 
 **Image builds work on the default case-insensitive macOS filesystem.** The installer creates

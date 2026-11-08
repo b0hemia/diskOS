@@ -1,4 +1,4 @@
-# A tour of diskOS 1.2.2
+# A tour of diskOS 1.2.3
 
 diskOS is a touch interface for the FiiO Snowsky Disc's 360x360 screen. Local playback uses the player supplied by the installed stock firmware; Beam plays through the selected receiver. The available player controls differ on V2.09, V2.28, V2.40, and V2.57; unavailable firmware-specific controls say "Not on this firmware". AirPlay Receiving is offered on V2.40 and V2.57 only.
 
@@ -309,7 +309,7 @@ Switch a radio on its row, tap the row to open it, rescan, and tap a listed devi
 | Wi-Fi | Switch the radio on the row; tapping the row while it is off turns it on, and tapping it while it is on opens scanning, connection, and saved-network details. |
 | Bluetooth | Switch the radio on the row; tapping the row while it is off turns it on, and tapping it while it is on opens scanning, pairing, connection, and device details. |
 | Bluetooth Codec | SBC by default; V2.57 offers AAC, LDAC Mobile, LDAC Standard, and LDAC High. The stock player applies the chosen codec; changing this row sends the choice at once. An unsupported headphone can fall back to SBC. |
-| Device name | The Disc's network name (letters, digits and hyphens, up to 32 characters, starting and ending with a letter or digit) and the name Beam shows to receivers. Applies after a restart; needs a 1.2.2 full flash. Reset this name returns to the stock default. |
+| Device name | The Disc's network name (letters, digits and hyphens, up to 32 characters, starting and ending with a letter or digit) and the name Beam shows to receivers. Applies after a restart; needs a full flash of 1.2.2 or later. Reset this name returns to the stock default. |
 | Bluetooth name | The name other Bluetooth devices see (printable ASCII, up to 32 characters and nine words). Reset this name returns to SNOWSKY DISC. A pending change applies when Bluetooth is available. |
 | Audio Source | Open Local Playback, Bluetooth Receiving, AirPlay Receiving (V2.40 and V2.57), USB DAC, or USB Storage. Local Playback is the usual music mode. |
 

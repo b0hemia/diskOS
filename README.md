@@ -38,7 +38,7 @@
 ## At a glance
 
 - **Device:** FiiO Snowsky Disc.
-- **Release described here:** diskOS and installer 1.2.2.
+- **Release described here:** diskOS and installer 1.2.3.
 - **Stock firmware supported:** V2.09, V2.28, V2.40, and V2.57. AirPlay receiving needs V2.40 or V2.57.
 - **Hosts:** Linux x86-64 (Debian, Ubuntu, Arch, CachyOS, Fedora); macOS Apple Silicon release package. Intel Macs can build the native tools. Windows 10/11 x64 release ZIP.
 - **Flash time:** about 20 minutes, including the firmware check and verification.
@@ -96,7 +96,7 @@
   animated GIF from the CustomCover folder on the SD card, with optional time, date, battery,
   now-playing and weather overlays.
 - [Network settings](docs/TOUR.md#settings-network) can rename the Disc and its Bluetooth name,
-  and give paired devices nicknames. The Disc's network name needs a full flash of 1.2.2.
+  and give paired devices nicknames. The Disc's network name needs a full flash of 1.2.2 or later.
 - Settings > Device > Automatic Update Checks (off by default) announces new releases; it never
   installs anything without your tap.
 - Swipe up from the bottom edge of the screen to go straight Home.
@@ -164,7 +164,7 @@ options for your own build, and error codes. Do not run the installer with `sudo
 
 Use **Windows 10/11 x64**:
 
-1. Extract the complete **diskos-installer-windows-x86_64.zip** from the 1.2.2 release.
+1. Extract the complete **diskos-installer-windows-x86_64.zip** from the 1.2.3 release.
    Open **diskos-installer.exe**; keep `_internal`, **RECOVERY.txt**, and all files together.
    The program is not code-signed. Windows SmartScreen may show "Windows protected your PC"
    on first run; if it does, select **More info**, then **Run anyway**.
@@ -193,7 +193,7 @@ installer starts the diskOS version inside that installer and clears downloaded 
 settings and music are kept. The network name hook, the per-flash identity and the boot-script
 update-retention fix also require a full flash;
 see the [release notes](docs/RELEASE_NOTES_1.2.2.md).
-The 1.2.2 release image includes the diskOS release key by default. Turn updates off
+The 1.2.3 release image includes the diskOS release key by default. Turn updates off
 on the Disc, or untick **Allow diskOS updates over Wi-Fi** when flashing. See [upgrading](docs/INSTALL.md#upgrading-to-122).
 
 To use the stock interface without reflashing, set **Settings > Device > Default UI > Stock**.
