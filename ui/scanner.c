@@ -1022,6 +1022,32 @@ static void wma_read(FILE *f, char *title,char *artist,char *album,char *genre,
     free(b);
 }
 
+/* Folder albums: every folder on the card is one album, named after the folder itself (the file's
+ * parent directory), whatever the files' ALBUM tags say. Files directly in the card root have no album
+ * folder and get "Unknown album". Audiobooks (.m4b) keep their tags. */
+#define FOLDER_ALBUM_MAX 159   /* bytes: MDB_STR (musicdb.h) - 1 */
+static void folder_album(const char *path, char *out, int cap){
+    const char *slash = strrchr(path, '/');
+    size_t dlen = slash ? (size_t)(slash - path) : 0;
+    size_t rlen = strlen(SCAN_ROOT);
+    if(!slash || dlen <= rlen || strncmp(path, SCAN_ROOT, rlen) != 0 || path[rlen] != '/'){
+        snprintf(out, cap, "%s", "Unknown album"); return;
+    }
+    const char *b = path + dlen;                 /* walk back to the start of the parent's name */
+    while(b > path && b[-1] != '/') b--;
+    size_t n = (size_t)(path + dlen - b);
+    /* The library keeps album names in MDB_STR (160) byte buffers and plays an album by its exact stored ALBUM value,
+     * so a longer name would be shown and requested cut short and match no row. Store it already cut to what fits,
+     * on a UTF-8 character boundary, so the list, the drill-in and the player all use the same value. */
+    if(n > FOLDER_ALBUM_MAX){
+        n = FOLDER_ALBUM_MAX;
+        while(n > 0 && ((unsigned char)b[n] & 0xC0) == 0x80) n--;   /* don't split a character */
+    }
+    snprintf(out, cap, "%.*s", (int)n, b);
+    str_trim(out);
+    if(!out[0]) snprintf(out, cap, "%s", "Unknown album");
+}
+
 /* Read tags + fill a filename fallback. Return code drives how the caller writes the row:
  *   1  = tags read (or a no-tag container like WAV) -> safe to INSERT a new row OR UPDATE in place.
  *   0  = a tag-bearing file that could NOT be OPENED (transient I/O) -> preserve existing tags and
@@ -1075,6 +1101,7 @@ static int tags_with_provenance(const char *path, const char *fname,
     if(!artist[0]) snprintf(artist,TAGLEN,"%s","Unknown artist");
     if(!album[0])  snprintf(album, TAGLEN,"%s","Unknown album");
     if(!genre[0])  snprintf(genre, TAGLEN,"%s","Unknown genre");
+    if(!has_ext(fname,".m4b")) folder_album(path, album, TAGLEN);   /* the folder is the album, not the ALBUM tag */
     return rerr ? -1 : 1;   /* -1: fallback-only (preserve existing tags, insert-if-new); 1: normal upsert */
 }
 
@@ -1294,10 +1321,13 @@ static void upsert_song(const char *path, const char *fname){
         if(exists){
             /* Preserve its tags while replacing the length with this scan's value (0 on failure). */
             sqlite3_stmt *du = NULL;
-            if(sqlite3_prepare_v2(g_db, "UPDATE SONG SET DURATION=?2 WHERE PATH=?1 AND COALESCE(IS_CUE,0)=0 "
+            /* the album comes from the folder, not the unreadable tags, so it is still refreshed */
+            if(sqlite3_prepare_v2(g_db, "UPDATE SONG SET DURATION=?2,ALBUM=?3,ALBUM_CODE=?4 WHERE PATH=?1 AND COALESCE(IS_CUE,0)=0 "
                                         "AND COALESCE(IS_ISO,0)=0;", -1, &du, NULL) != SQLITE_OK){ g_scan_err=1; return; }
             sqlite3_bind_text(du, 1, path, -1, SQLITE_TRANSIENT);
             sqlite3_bind_int64(du, 2, (sqlite3_int64)dur_ms);
+            sqlite3_bind_text(du, 3, album, -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int(du, 4, code4(album));
             int urc = sqlite3_step(du);
             sqlite3_finalize(du);
             if(urc != SQLITE_DONE){ g_scan_err=1; return; }
@@ -1557,7 +1587,7 @@ static int cue_write_file(const cue_sheet_t *cs, const cue_file_t *f, const char
         long long len = (i + 1 < f->ntr ? tr[i + 1].ms : dur) - t->ms;
         char tt[TAGLEN], ta[TAGLEN], tb[TAGLEN], tg[TAGLEN];
         snprintf(tt, sizeof tt, "%.*s", TAGLEN - 1, t->title[0] ? t->title : name);   /* tags are TAGLEN, like every row */
-        snprintf(tb, sizeof tb, "%s", cs->title[0] ? cs->title : album);
+        snprintf(tb, sizeof tb, "%s", album);   /* the audio file's folder (folder_album), not the sheet's TITLE */
         snprintf(ta, sizeof ta, "%s", t->perf[0] ? t->perf : cs->perf[0] ? cs->perf : artist);
         snprintf(tg, sizeof tg, "%s", cs->genre[0] ? cs->genre : genre);
         for(int pass = 0; pass < 2 && rc == 1; pass++){
@@ -1880,7 +1910,8 @@ static void iso_write(const char *path, const iso_disc_t *d){
         char tt[TAGLEN], ta[TAGLEN];
         if(d->title[i][0]) snprintf(tt, sizeof tt, "%s", d->title[i]); else snprintf(tt, sizeof tt, "Track %d", i + 1);
         snprintf(ta, sizeof ta, "%s", d->perf[i][0] ? d->perf[i] : d->artist[0] ? d->artist : "Unknown artist");
-        const char *al = d->album[0] ? d->album : "Unknown album", *ge = "Unknown genre";
+        char al[TAGLEN]; folder_album(path, al, sizeof al);   /* the image's folder is its album */
+        const char *ge = "Unknown genre";
         for(int pass = 0; pass < 2; pass++){
             sqlite3_stmt *s = pass ? in : up;
             sqlite3_reset(s); sqlite3_clear_bindings(s);

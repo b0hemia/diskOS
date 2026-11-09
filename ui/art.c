@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
@@ -274,22 +275,74 @@ static int art_run_pipeline(const char *input, const char *cover_bmp,
     return art_run_helper(input, NULL, cover_bmp, thumb_bmp, backdrop_bmp, cancellable, gen0, deadline_ms);
 }
 
-/* Sibling cover filenames tried when a track has no embedded art, in this order. The helper recognises JPEG,
- * PNG, BMP and GIF by content, so the name only decides precedence. exfat is case-insensitive, so a couple of
- * casings cover the common ones. */
+/* Folder covers: every folder is one album (the scanner names it after the folder), and a .jpg/.jpeg in the
+ * folder is that album's cover. It wins over embedded art. With several JPEGs the usual cover names win (in this
+ * order, any casing), then the first other JPEG by name, so the choice doesn't depend on directory order. Hidden
+ * files (macOS "._x.jpg" resource forks) are skipped. Embedded art is the fallback when the folder has no JPEG. */
+static const char *ART_JPG_PREFER[] = { "cover", "folder", "front", "albumart", "album" };
+#define ART_JPG_PREFER_N (sizeof ART_JPG_PREFER / sizeof ART_JPG_PREFER[0])
+#define ART_DIR_SCAN_MAX 4096   /* entries read per folder: a huge flat folder can't stall the art worker */
+static int art_jpg_rank(const char *name){       /* -1 = not a cover JPEG; lower is better */
+    if(name[0] == '.') return -1;
+    const char *dot = strrchr(name, '.');
+    if(!dot || dot == name || (strcasecmp(dot, ".jpg") != 0 && strcasecmp(dot, ".jpeg") != 0)) return -1;
+    size_t stem = (size_t)(dot - name);
+    for(unsigned i = 0; i < ART_JPG_PREFER_N; i++)
+        if(strlen(ART_JPG_PREFER[i]) == stem && strncasecmp(name, ART_JPG_PREFER[i], stem) == 0) return (int)i;
+    return (int)ART_JPG_PREFER_N;
+}
+/* The folder cover for `track` (full path into out, its stat into *st). 1 = found, 0 = none. */
+static int art_folder_jpg(const char *track, char *out, size_t cap, struct stat *st){
+    const char *slash = strrchr(track, '/');
+    if(!slash) return 0;
+    /* `track` is itself a picture (an Online Album Art download in the card's .diskos cache): decode just that,
+     * never a neighbouring picture */
+    static const char *IMG[] = { ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp" };
+    const char *ext = strrchr(slash, '.');
+    for(unsigned i = 0; ext && i < sizeof IMG / sizeof IMG[0]; i++) if(strcasecmp(ext, IMG[i]) == 0) return 0;
+    size_t dlen = (size_t)(slash - track);
+    if(dlen == 0 || dlen > 900) return 0;
+    char dir[1024]; memcpy(dir, track, dlen); dir[dlen] = 0;
+    DIR *d = opendir(dir);
+    if(!d) return 0;
+    char best[256] = ""; int best_rank = -1; unsigned seen = 0;
+    struct dirent *e;
+    while((e = readdir(d)) && seen++ < ART_DIR_SCAN_MAX){
+        int r = art_jpg_rank(e->d_name);
+        if(r < 0 || strlen(e->d_name) >= sizeof best) continue;
+        if(best_rank < 0 || r < best_rank || (r == best_rank && strcmp(e->d_name, best) < 0)){
+            char p[1024]; struct stat s;
+            int n = snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+            if(n <= 0 || n >= (int)sizeof p || stat(p, &s) != 0 || !S_ISREG(s.st_mode)) continue;
+            snprintf(best, sizeof best, "%s", e->d_name); best_rank = r;
+        }
+    }
+    closedir(d);
+    if(best_rank < 0) return 0;
+    int n = snprintf(out, cap, "%s/%s", dir, best);
+    if(n <= 0 || (size_t)n >= cap || stat(out, st) != 0 || !S_ISREG(st->st_mode)) return 0;
+    return 1;
+}
+/* Non-JPEG sibling covers, tried after embedded art when the folder has no JPEG. The helper recognises PNG, BMP and
+ * GIF by content, so the name only decides precedence. */
 static const char *ART_COVER_NAMES[] = {
-    "cover.jpg","folder.jpg","cover.jpeg","folder.jpeg","cover.png","folder.png","cover.bmp","folder.bmp",
-    "Cover.jpg","Folder.jpg","AlbumArt.jpg","albumart.jpg",
+    "cover.png","folder.png","cover.bmp","folder.bmp",
 };
 static const unsigned ART_COVER_N = sizeof ART_COVER_NAMES / sizeof ART_COVER_NAMES[0];
-/* Mix the identity of the track's sidecar cover files (name, size, mtime of each one present, in lookup order)
- * into *h, so replacing, adding or removing a cover.jpg/png invalidates the cache entry. No inode: it is not
- * stable on exfat/vfat (see artcache.c fingerprint). */
+/* Mix the identity of the track's sidecar cover files (the folder JPEG's name, size, mtime, then each fallback
+ * file present, in lookup order) into *h, so replacing, adding or removing a cover invalidates the cache entry.
+ * No inode: it is not stable on exfat/vfat (see artcache.c fingerprint). */
 void art_sidecar_signature(const char *track, uint64_t *h){
     const char *slash = strrchr(track, '/');
     if(!slash) return;
     size_t dlen = (size_t)(slash - track);
     if(dlen == 0 || dlen > 900) return;
+    { char jp[1024]; struct stat js;
+      if(art_folder_jpg(track, jp, sizeof jp, &js)){
+          for(const char *p = jp + dlen; *p; p++){ *h ^= (unsigned char)*p; *h *= 1099511628211ULL; }
+          uint64_t v[2] = { (uint64_t)js.st_size, (uint64_t)js.st_mtime };
+          for(int k = 0; k < 2; k++) for(int b = 0; b < 8; b++){ *h ^= (v[k] >> (b * 8)) & 0xff; *h *= 1099511628211ULL; }
+      } }
     for(unsigned i = 0; i < ART_COVER_N; i++){
         char cov[1024]; struct stat st;
         int n = snprintf(cov, sizeof cov, "%.*s/%s", (int)dlen, track, ART_COVER_NAMES[i]);
@@ -299,9 +352,8 @@ void art_sidecar_signature(const char *track, uint64_t *h){
     }
 }
 
-/* Render cover/thumb/backdrop for a track. Prefer the track's EMBEDDED art (stock precedence); if
- * there is none, fall back to a sibling cover file in the track's folder so albums that keep their
- * art as cover.jpg/folder.jpg still show artwork instead of the no-art placeholder. A cancellable
+/* Render cover/thumb/backdrop for a track. Prefer the folder's JPEG (art_folder_jpg: the folder is the
+ * album); if there is none or it can't be decoded, the track's EMBEDDED art, then a PNG/BMP sibling cover. A cancellable
  * decode snapshots the cancel generation and stops (returns -1, no wasted work) as soon as a skip
  * supersedes it, whether during the embedded run or between it and the cover fallback. */
 /* Read the current cancel generation (for a caller that wants to capture it ATOMICALLY with its own
@@ -325,7 +377,13 @@ static int art_make_all_ex_gen_leased(const char *track, const char *cover_bmp,
     if(t_kill_preset_valid){ t_kill0 = t_kill_preset; t_kill_preset_valid = 0; }
     else { pthread_mutex_lock(&g_pid_mu); t_kill0 = g_kill_gen; pthread_mutex_unlock(&g_pid_mu); }
     t_kill_armed = 1;
-    int r = art_run_pipeline(track, cover_bmp, thumb_bmp, backdrop_bmp, cancellable, gen0, deadline);
+    int r = -1;
+    { char jp[1024]; struct stat js;                 /* the folder JPEG first */
+      if(art_folder_jpg(track, jp, sizeof jp, &js))
+          r = art_run_pipeline(jp, cover_bmp, thumb_bmp, backdrop_bmp, cancellable, gen0, deadline);
+      if(r == 0){ t_kill_armed = 0; return 0; }
+      if(r == -2){ t_kill_armed = 0; return -1; } }   /* superseded or revoked - stop */
+    r = art_run_pipeline(track, cover_bmp, thumb_bmp, backdrop_bmp, cancellable, gen0, deadline);
     if(r == 0){ t_kill_armed = 0; return 0; }     /* embedded art */
     if(r == -2){ t_kill_armed = 0; return -1; }   /* superseded or revoked - stop */
 
@@ -352,7 +410,7 @@ static int art_make_all_ex_gen_leased(const char *track, const char *cover_bmp,
 /* The vinyl screensaver's sharp 360x360 cover for `track`, written to out_raw as top-down BGRA. Same rules as the
  * artwork requests: SD admission for the whole request, the caller's absolute deadline (CLOCK_MONOTONIC ms, set
  * when the request was made, so time spent queued counts), revocation stops every attempt,
- * embedded art first then the sidecar cover files. Not cancellable by track skips (the saver checks its own
+ * the folder JPEG, then embedded art, then the other sidecar cover files. Not cancellable by track skips (the saver checks its own
  * request generation before using the result). Blocking: call it from a worker thread, never the UI thread. */
 int art_make_saver(const char *track, const char *out_raw, int64_t deadline_ms){
     unsigned kill0;
@@ -362,7 +420,10 @@ int art_make_saver(const char *track, const char *out_raw, int64_t deadline_ms){
     if(!sd_io_begin()) return -1;
     t_kill0 = kill0; t_kill_armed = 1;
     int64_t deadline = deadline_ms;                           /* fixed when the request was POSTED, not now */
-    int r = art_run_helper(track, out_raw, NULL, NULL, NULL, 0, 0, deadline);
+    int r = -1;
+    { char jp[1024]; struct stat js;                          /* the folder JPEG first, like the artwork requests */
+      if(art_folder_jpg(track, jp, sizeof jp, &js)) r = art_run_helper(jp, out_raw, NULL, NULL, NULL, 0, 0, deadline); }
+    if(r == -1) r = art_run_helper(track, out_raw, NULL, NULL, NULL, 0, 0, deadline);
     if(r == -1){
         const char *slash = strrchr(track, '/');
         size_t dlen = slash ? (size_t)(slash - track) : 0;
