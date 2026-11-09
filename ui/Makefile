@@ -155,16 +155,19 @@ $(DEP_OUT)/$(TLS_ARCH)/libspeexdsp.a:
 tls-host:
 	$(MAKE) --no-print-directory TLS_ARCH=host $(subst /mipsel/,/host/,$(TLS_LIBS))
 
-# Embedded stock-library helper (see the diskos-audiodec rules at the end).
+# Embedded stock-library helper (see the diskos-audiodec rules at the end) and artwork helper (diskos-artdec rules).
 AUDIODEC_TOOL := $(APP)/tools/embed_audiodec.py
 AUDIODEC_RAW := $(APP)/audio_stock_image.raw
 AUDIODEC_OBJ := $(APP)/audio_stock_image.o
-mq_ui: $(SENDER_LIBS) $(OBJS) $(AUDIODEC_OBJ) $(HB_LIB) $(DEP_OUT)/mipsel/libfreetype.a $(TLS_LIBS) $(SB_LIB)
+ARTDEC_RAW := $(APP)/artdec_image.raw
+ARTDEC_OBJ := $(APP)/artdec_image.o
+mq_ui: $(SENDER_LIBS) $(OBJS) $(AUDIODEC_OBJ) $(ARTDEC_OBJ) $(HB_LIB) $(DEP_OUT)/mipsel/libfreetype.a $(TLS_LIBS) $(SB_LIB)
 	@$(MAKE) --no-print-directory check-theme
-	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(AUDIODEC_OBJ) $(LDLIBS)
+	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(AUDIODEC_OBJ) $(ARTDEC_OBJ) $(LDLIBS)
 	cp -f $@ $@.debug                 # unstripped twin for crash symbolication (not shipped)
 	$(CROSS)strip $@ || true
 	python3 -I -B $(AUDIODEC_TOOL) verify $@ diskos-audiodec $(AUDIODEC_RAW) || { rm -f $@; exit 1; }
+	python3 -I -B $(AUDIODEC_TOOL) verify --kind artdec $@ diskos-artdec $(ARTDEC_RAW) || { rm -f $@; exit 1; }
 	@ls -l $@
 	@{ echo "artifact: $(notdir $@)"; \
 	   echo "md5: $$(md5sum $@ | cut -d' ' -f1)"; \
@@ -187,6 +190,18 @@ diskos-artdec: $(APP)/tools/diskos_artdec.c $(APP)/tools/stb_image.h $(APP)/art_
 	$(CC) -O2 -static -Wall -Wextra -Werror $(REPRO_FLAGS) $(FP_FLAGS) -I$(APP) $(TLS_FLAGS) -o $@ $< $(DEP_OUT)/$(TLS_ARCH)/libmbedcrypto.a -lm
 	$(CROSS)strip $@ || true
 	@md5sum $@
+# It also travels inside the signed mq_ui (owner decision 2026-11-09), like diskos-audiodec: an app update must bring
+# the helper its art.c calls, and the image's copy may be older. The read-only .diskos_artdec section carries the
+# finished ELF with a generated length and SHA-256; art.o (only) is built to write a private copy before each run,
+# verify it and execute that copy, never a pathname. The post-strip check in the mq_ui recipe proves the exact bytes.
+$(ARTDEC_RAW): diskos-artdec $(AUDIODEC_TOOL)
+	python3 -I -B $(AUDIODEC_TOOL) image --kind artdec diskos-artdec $@
+$(ARTDEC_OBJ): $(APP)/artdec_image.S $(APP)/embedded_image.inc $(ARTDEC_RAW)
+	$(CC) -c -DARTDEC_IMAGE_RAW='"$(ARTDEC_RAW)"' $< -o $@
+$(APP)/art.o: CFLAGS += -DART_HELPER_EMBEDDED=1
+ifneq ($(strip $(OBJECT_OUT)),)
+$(OBJECT_OUT)/ipodos-native/art.o: CFLAGS += -DART_HELPER_EMBEDDED=1
+endif
 
 # Standalone TTC probe and a two-link size comparison. Neither target changes mq_ui.
 FT_DIR := $(NUI)/third_party
@@ -233,7 +248,7 @@ $(DEP_OUT)/$(TLS_ARCH)/objects/%.o: $(TLS_DIR)/%.c
 clean:
 	rm -rf $(AP_OUT) $(BT_OUT)
 	rm -f $(OBJS) $(OBJS:.o=.d) mq_ui mq_ui.debug mq_ui.manifest ipodos-ui diskos-bootprobe diskos-artdec diskos-audiodec
-	rm -f $(AUDIODEC_RAW) $(AUDIODEC_RAW).part $(AUDIODEC_OBJ)
+	rm -f $(AUDIODEC_RAW) $(AUDIODEC_RAW).part $(AUDIODEC_OBJ) $(ARTDEC_RAW) $(ARTDEC_RAW).part $(ARTDEC_OBJ)
 -include $(OBJS:.o=.d)
 -include $(AP_OBJS:.o=.d)
 -include $(BT_OBJS:.o=.d)
@@ -262,7 +277,7 @@ mq_ui: diskos-audiodec
 # objects that start the helper are built for it; the post-strip check above proves the exact bytes are carried.
 $(AUDIODEC_RAW): diskos-audiodec $(AUDIODEC_TOOL)
 	python3 -I -B $(AUDIODEC_TOOL) image diskos-audiodec $@
-$(AUDIODEC_OBJ): $(APP)/audio_stock_image.S $(AUDIODEC_RAW)
+$(AUDIODEC_OBJ): $(APP)/audio_stock_image.S $(AUDIODEC_RAW) $(APP)/embedded_image.inc
 	$(CC) -c -DAUDIO_STOCK_IMAGE_RAW='"$(AUDIODEC_RAW)"' $< -o $@
 $(APP)/audio_decode.o $(APP)/airplay_sender.o: CFLAGS += -DAUDIO_STOCK_EMBEDDED=1
 ifneq ($(strip $(OBJECT_OUT)),)
