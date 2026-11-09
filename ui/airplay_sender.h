@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef DISKOS_AIRPLAY_SENDER_H
 #define DISKOS_AIRPLAY_SENDER_H
+#include "trackpath.h"
 #include "airplay_queue.h"
 #include "cast_handoff.h"
 #include <sys/types.h>
@@ -18,7 +19,7 @@ typedef struct {
     uint32_t serial, now, deadline, terminate_at, kill_at, fault_at;
     unsigned skipped, unsupported_choice, queue_changed;
     int stream_ready, format_pending, input_mode, input_pos_id;
-    unsigned input_generation; uint64_t input_token; char input_path[256];
+    unsigned input_generation; uint64_t input_token; char input_path[TRACK_PATH_MAX];
     unsigned player_generation; int source, mode, pos_id, local_id, local_ord, rate, bits, forget_next, volume, have_volume;
     rd_receiver target; pb_remote_state view;
 } aps_sender;

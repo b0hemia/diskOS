@@ -126,7 +126,7 @@ static pthread_mutex_t g_wmu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_wcv = PTHREAD_COND_INITIALIZER;
 static unsigned g_wgen, g_wac_gen;              /* g_wac_gen: artcache_gen() when the request was made */
 static int g_wstarted, g_wbusy, g_wwant, g_wready, g_widx;
-static char g_wpaths[6][512];
+static char g_wpaths[6][TRACK_PATH_MAX];
 static int g_wn;
 static sprite_t g_wres;
 static unsigned g_wres_gen, g_wres_ac_gen;
@@ -377,7 +377,7 @@ static void aw_seed_cb(lv_timer_t *t){
         for(int pass = 0; pass < 2; pass++){
             int found = 0;
             for(int i=0;i<m;i++){
-                char track[512]; track[0]=0;
+                char track[TRACK_PATH_MAX]; track[0]=0;
                 int ready=mdb_song_path(ids[i],track,sizeof track);
                 if(ready<0){ lv_timer_set_period(t,2000); return; }
                 if(ready>0 && track[0]){

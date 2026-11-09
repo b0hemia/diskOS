@@ -3,6 +3,7 @@
 #ifndef MUSICDB_H
 #define MUSICDB_H
 
+#include "trackpath.h"
 #define MDB_MAX_SONGS   1500
 #define MDB_MAX_GROUPS  600
 #define MDB_STR         160
@@ -111,7 +112,7 @@ typedef struct {
     int  dur_ms;
     char title[MDB_STR];     /* TITLE, else the file NAME */
     char artist[MDB_STR];
-    char path[256];
+    char path[TRACK_PATH_MAX];
 } mdb_qrow_t;
 #define MDB_UPNEXT_EMPTY    0      /* the queue is empty */
 #define MDB_UPNEXT_ERROR    (-1)   /* the queue can't be read (DB error) */
@@ -148,7 +149,7 @@ typedef struct {
     char title[MDB_STR];     /* TITLE, else NAME, else the file name */
     char artist[MDB_STR];
     char album[MDB_STR];
-    char path[256];
+    char path[TRACK_PATH_MAX];
 } mdb_srow_t;
 int  mdb_list_song_ids(int list_type, const char *name, int *ids, int cap);
 int  mdb_song_rows(const int *ids, int n, mdb_srow_t *out, unsigned char *flags);

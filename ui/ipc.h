@@ -8,6 +8,7 @@
  * preference must be an explicit 0/1. Absent/invalid debug file sends nothing
  * unless restoring an experiment already active in this process. */
 void ipc_bt_autonext_poll(uint32_t now, int eligible, int preference);
+#include "trackpath.h"
 #define IPC_TITLE_CAPACITY 256
 /* Bounded receiver data, copied read-only; transport_state is the raw stock
  * value, not a proven playing indication. Progress stays invalid until qualified. */
@@ -34,7 +35,7 @@ typedef struct {
     char album[160];
     char playing_num[24];
     char work_mode[24];
-    char path[256];
+    char path[TRACK_PATH_MAX];
     long duration_ms;
     long position_ms;
     int  state;       /* RAW A2 metadata when returned by ipc_get_state() - UNRELIABLE (reports 0 while

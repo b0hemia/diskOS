@@ -16,7 +16,7 @@
 #include "cast_format.h"
 #include "sdio.h"
 
-typedef struct { cc_ev e; int play_mode, pos_id; char path[256]; uint32_t ep; } cw_ev;   /* ENTER fills play_mode / pos_id / path; the others only e. SELECT: e.ids is a malloc'd copy owned by the slot. ep: the epoch it was posted in */
+typedef struct { cc_ev e; int play_mode, pos_id; char path[TRACK_PATH_MAX]; uint32_t ep; } cw_ev;   /* ENTER fills play_mode / pos_id / path; the others only e. SELECT: e.ids is a malloc'd copy owned by the slot. ep: the epoch it was posted in */
 struct cw {
     pthread_mutex_t mu; pthread_cond_t ev_cv, act_cv, idle_cv; pthread_t th;
     int closing, busy, force_local;

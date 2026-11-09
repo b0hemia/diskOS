@@ -629,7 +629,7 @@ static void add_album_cover_header(const char *album, const char *artist){
     char src[64]; src[0] = 0;
     int ids[6]; int n = mdb_album_track_ids(album, ids, 6);
     for(int i=0;i<n;i++){
-        char track[512]; track[0]=0;
+        char track[TRACK_PATH_MAX]; track[0]=0;
         char tmp[48]; snprintf(tmp, sizeof tmp, "/tmp/album_hdr%d.bmp", g_hdr_cover_ctr & 3);
         if(mdb_song_path(ids[i], track, sizeof track)>0 && track[0] && artcache_get_cover(track, tmp)==0){
             snprintf(src, sizeof src, "A:%s", tmp); g_hdr_cover_ctr++;

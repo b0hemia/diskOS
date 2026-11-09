@@ -81,10 +81,10 @@ static int g_np_fav, g_np_have, g_fav_px, g_fav_py;
  * confirms via a2. Position (a1) frames trigger a full NP refresh from the OLD is_favorite,
  * which would flip the heart back. We hold the tapped value for this exact track until the
  * player confirms it, the track changes, or a timeout - so the heart doesn't visibly bounce. */
-static char g_np_curpath[520];
+static char g_np_curpath[TRACK_PATH_MAX];
 static int  g_favp_active = 0, g_favp_val = 0;
 static uint32_t g_favp_set = 0;
-static char g_favp_path[520];
+static char g_favp_path[TRACK_PATH_MAX];
 static lv_obj_t *btn_mode;
 static lv_obj_t *mode_icon;
 static lv_obj_t *mode_one;
@@ -95,16 +95,17 @@ static lv_obj_t *t_elapsed;
 static lv_obj_t *t_remain;
 
 static lv_color_t accent;
-static char last_path[256];
-static char g_stat_path[256];   /* last track counted in play history (count once per new track) */
+static char last_path[TRACK_PATH_MAX];
+static char g_stat_path[TRACK_PATH_MAX];   /* last track counted in play history (count once per new track) */
 static int g_cast_played;       /* 15c: main.c's receiver confirmation (PLAYING on the facade track's own media); the play-history gate while casting */
 void ui_set_cast_played(int on){ g_cast_played = on != 0; }
 /* Art cache key = album title + the track's PARENT DIRECTORY (not artist). This reuses art
  * within a real album AND within a compilation/various-artists album (same folder), but does
  * NOT reuse across two genuinely-different albums that merely share a title in different
  * folders. For a flat library it degrades to album-only - no worse than before. */
-static char last_art_key[420];  /* key of the art currently shown */
-static char want_art_key[420];  /* key the CURRENT track wants; a finished decode applies only if it matches */
+#define ART_KEY_MAX (160 + 1 + TRACK_PATH_MAX)   /* make_art_key: album (MDB_STR) + "\n" + the track's folder, or a book's full path */
+static char last_art_key[ART_KEY_MAX];  /* key of the art currently shown */
+static char want_art_key[ART_KEY_MAX];  /* key the CURRENT track wants; a finished decode applies only if it matches */
 static char last_seed_a[IPC_TITLE_CAPACITY];
 static char last_seed_b[160];
 static char cover_src[48];
@@ -632,7 +633,7 @@ static void transport_cb(lv_event_t *e)
  * main-loop swipe gesture (-> SCR_NPHUB). */
 static int g_cover_px, g_cover_py;
 /* ---- full-screen album art (image choice: fsart_reload_img, below the art state) ---- */
-static char fsart_path[256];
+static char fsart_path[TRACK_PATH_MAX];
 static pb_source fsart_source;
 static void fsart_reload_img(void);
 static int fsart_local(void);
@@ -1663,10 +1664,10 @@ static void clear_art_state(void)
  * (displayed_idx ^ 1), so an in-flight decode can never overwrite the /tmp BMP the
  * shown art (Home pill / Saver backdrop) may still be rendering from. */
 typedef struct {
-    char track[256];
+    char track[TRACK_PATH_MAX];
     int  idx;
     char out[40], tout[40], bout[40];
-    char art_key[420];       /* album+dir reuse/staleness key (see last_art_key) */
+    char art_key[ART_KEY_MAX];       /* album+dir reuse/staleness key (see last_art_key) */
     int  is_clear;           /* "no track" - handled on the main thread; worker skips */
     char artist[160], album[160], title[IPC_TITLE_CAPACITY];   /* for the online-art fallback (netart.c) */
     int  online;             /* Online Album Art was on when this was requested (read on the main thread) */
@@ -2110,7 +2111,7 @@ static void sleep_click_cb(lv_event_t *e)
 static void make_art_key(const track_state_t *st, char *out, int cap)
 {
     if(mdb_is_book_path(st->path)){ snprintf(out, cap, "%s", st->path); return; }
-    char dir[256]; snprintf(dir, sizeof dir, "%s", st->path);
+    char dir[TRACK_PATH_MAX]; snprintf(dir, sizeof dir, "%s", st->path);
     char *slash = strrchr(dir, '/'); if(slash) *slash = '\0'; else dir[0] = '\0';
     snprintf(out, cap, "%s\n%s", st->album, dir);
 }
@@ -2183,7 +2184,7 @@ static void update_cover_for_path(const track_state_t *st)
         online_only = 1;
     }
     np_sharp_demand();
-    char art_key[420]; make_art_key(st, art_key, sizeof art_key);
+    char art_key[ART_KEY_MAX]; make_art_key(st, art_key, sizeof art_key);
     copy_cstr(want_art_key, sizeof want_art_key, art_key);   /* what the live track wants now */
 
     /* Art is shared within an album/folder: same key + valid art -> reuse, skip decoding. */
@@ -2413,7 +2414,7 @@ static void *art_prewarm_worker(void *arg)
          * the non-thread-safe album/track caches); the worker only pops + decodes here, so no mdb
          * in-memory cache is touched off the UI thread. Runs regardless of the idle gate (users want
          * covers while browsing) but stays temp-throttled and serialized with the live NP decoder. */
-        char qpath[512];
+        char qpath[TRACK_PATH_MAX];
         if(pwq_pop(qpath, sizeof qpath)){
             pw_wait_window(&hot);                        /* heat gate + yields to the live decode */
             char fp0[24];
@@ -2441,7 +2442,7 @@ static void *art_prewarm_worker(void *arg)
         { int busy; pthread_mutex_lock(&g_art_mu); busy=g_art_inflight; pthread_mutex_unlock(&g_art_mu);
           if(busy){ usleep(300*1000); continue; } }
 
-        char path[300];
+        char path[TRACK_PATH_MAX];
         if(!mdb_prewarm_next(id, &id, path, sizeof path)){   /* swept the whole library */
             id=0; pw_sleep(did_work?60:1800); did_work=0; continue;   /* rest longer if nothing pending (wake for queued covers) */
         }

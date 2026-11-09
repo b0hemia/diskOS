@@ -18,7 +18,7 @@
 #include <unistd.h>
 typedef struct {
     pthread_t thread; _Atomic int done, cancel; int result, mode, pos_id; unsigned rate, bits;
-    const char *root; char path[256]; unsigned generation; uint64_t token;
+    const char *root; char path[TRACK_PATH_MAX]; unsigned generation; uint64_t token;
 } input_check;
 static int input_cancel(void *ctx){ input_check *c = ctx; return atomic_load(&c->cancel); }
 static void *input_run(void *ctx){

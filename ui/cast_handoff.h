@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef DISKOS_CAST_HANDOFF_H
 #define DISKOS_CAST_HANDOFF_H
+#include "trackpath.h"
 #include <stdint.h>
 #include "playback.h"
 /* Cast handoff: the pure state machine that moves playback between the Disc and a receiver and back. No sockets, no LVGL, no
@@ -74,7 +75,7 @@ typedef struct {
     ho_drain drain;
     ho_msg after;                                  /* message once a STOPPING ends */
     unsigned gen; uint64_t token; long pos, dur;
-    char path[256], title[256], artist[160], album[160], dest[48];
+    char path[TRACK_PATH_MAX], title[256], artist[160], album[160], dest[48];
 } ho;
 void     ho_init(ho *h);
 ho_state ho_get(const ho *h);

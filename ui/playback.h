@@ -8,10 +8,11 @@
  * owner. The raw local state is never modified and stays available for local-player
  * health and guards. Nothing here opens a socket or calls the Cast session; call it from the LVGL thread only.
  * A remote command never produces a /player frame. */
+#include "trackpath.h"
 #define PB_TEXT_MAX 256
 typedef struct {
     int  have_track;
-    char title[PB_TEXT_MAX], artist[160], album[160], path[PB_TEXT_MAX]; /* track identity retains its library path */
+    char title[PB_TEXT_MAX], artist[160], album[160], path[TRACK_PATH_MAX]; /* track identity retains its library path */
     long position_ms, duration_ms;
     int  playing;
     int  queue_pos, queue_len;   /* LOCAL: queue_pos = the player's current row (pos_id, 0 unknown), queue_len 0 = unknown */

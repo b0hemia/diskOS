@@ -648,7 +648,7 @@ static int parse_a2(const char*payload,int len){
         state_val>=0 && tk[state_val].type==JSMN_PRIMITIVE &&
         stock_a2_scalar(payload+tk[state_val].start,tk[state_val].end-tk[state_val].start,0);
     pthread_mutex_lock(&g_mu);
-    char oldpath[256]; snprintf(oldpath, sizeof oldpath, "%s", g_state.path);   /* detect a track-identity change */
+    char oldpath[TRACK_PATH_MAX]; snprintf(oldpath, sizeof oldpath, "%s", g_state.path);   /* detect a track-identity change */
     v=find_val(payload,tk,nt,"state");        if(v>=0) g_state.state=(int)tok_long(payload,&tk[v]);
     v=find_val(payload,tk,nt,"playing_num");  if(v>=0) copy_tok(payload,&tk[v],g_state.playing_num,sizeof g_state.playing_num);
     v=find_val(payload,tk,nt,"work_mode");    if(v>=0) copy_tok(payload,&tk[v],g_state.work_mode,sizeof g_state.work_mode);

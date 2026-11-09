@@ -57,13 +57,13 @@ static int g_local_done, g_local_found;
 static int g_title_pending;
 static uint64_t g_token;
 static unsigned g_generation;
-static char g_path[256];                       /* current track path (main thread only) */
+static char g_path[TRACK_PATH_MAX];                       /* current track path (main thread only) */
 
 /* Per-fetch inputs snapshotted on the MAIN thread before pthread_create and handed to
  * the worker as its arg, so the worker never reads the g_req / g_q_title / g_q_artist /
  * g_path globals directly (they are main-thread-only; a re-open could otherwise race
  * the worker's reads of them). */
-typedef struct { unsigned req; int online, online_only; char title[512], artist[512], path[256]; } ly_job_t;  /* enc query, see g_q_* */
+typedef struct { unsigned req; int online, online_only; char title[512], artist[512], path[TRACK_PATH_MAX]; } ly_job_t;  /* enc query, see g_q_* */
 
 
 static void urlenc(const char *s, char *out, int cap)
@@ -202,7 +202,7 @@ static void *lyrics_thread(void *arg)
 
     /* 1) local sibling .lrc FIRST - instant for offline users who sideloaded lyrics (no 12s wait) */
     if(!job->online_only && job->path[0] && sd_io_begin()){
-        char lrc[320]; derive_lrc(job->path, lrc, sizeof lrc);
+        char lrc[TRACK_PATH_MAX + 8]; derive_lrc(job->path, lrc, sizeof lrc);
         FILE *f = fopen(lrc, "r");
         if(f){ read_lrc(f, g_lbuf, sizeof g_lbuf); fclose(f); }
         sd_io_end();

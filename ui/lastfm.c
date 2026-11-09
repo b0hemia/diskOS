@@ -420,7 +420,7 @@ static int  g_auth_want_token;              /* getToken requested; started when 
 static int64_t g_auth_next_ms, g_auth_deadline_ms, g_auth_started_ms, g_backoff_ms;
 /* watcher candidate */
 static char g_cur_artist[160], g_cur_track[IPC_TITLE_CAPACITY], g_cur_album[160];
-static char g_cur_path[520];   /* file path: part of track identity so consecutive distinct files with the
+static char g_cur_path[TRACK_PATH_MAX];   /* file path: part of track identity so consecutive distinct files with the
                                 * SAME title+artist each scrobble separately (not merged into one) */
 static long g_cur_dur_ms, g_cur_lastpos_ms, g_cur_listened_ms, g_cur_start_unix;
 static int  g_np_pending, g_scrobbled, g_have_cur, g_title_pending;

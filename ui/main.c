@@ -2101,7 +2101,7 @@ int ui_play_favorite(int love_id, int pos1){
     if(local_start_refuse()) return 0;   /* Cast 14a */
     if(love_id <= 0 || pos1 < 1){ ui_toast("Couldn't find that song"); return 0; }
     /* prove this exact track starts before caching scope; a row gone since the list filled would only be refused */
-    char lpath[256];
+    char lpath[TRACK_PATH_MAX];
     if(!mdb_love_path(love_id, lpath, sizeof lpath)){ ui_toast("Couldn't find that song"); return 0; }
     return ui_play_list_ex(6, "", pos1, love_id);
 }
@@ -2233,7 +2233,7 @@ int ui_play_song_by_path(const char *path){
  * its bookmark overwritten. A single ~400ms tick drives the state machine: it waits for the player to
  * actually load THIS book (not a blind delay), applies the resume seek once, then checkpoints at a ~10s
  * cadence and detects the end. Ending the session on any explicit track change keeps the last save. */
-static char     g_book_sess[256];        /* the book of the active session ("" = none) */
+static char     g_book_sess[TRACK_PATH_MAX];        /* the book of the active session ("" = none) */
 static long     g_book_resume_ms = -1;   /* resume position owed, or <=0 = none */
 static int      g_book_resume_done;      /* 1 once resume is applied (or not needed) -> checkpoint may run */
 static int      g_book_confirmed;        /* 1 once the player reports THIS book as the current track */
@@ -4763,7 +4763,7 @@ int main(int argc, char **argv){
     int fsart_touch=0; /* press began while full-screen art was up -> LVGL's overlay click closes it; we only swallow */
     int sleep_touch=0; /* press began while the sleep popover was up -> swallow the whole gesture (no ring seek) */
     playstate_t g_ps = { -1, 0 }; int last_playing=-1;   /* play/pause inference (playstate.c, host-tested) */
-    char np_last_path[256] = "";   /* last track whose art/backdrop was pushed - so a mere position tick doesn't re-invalidate the 360px backdrop */
+    char np_last_path[TRACK_PATH_MAX] = "";   /* last track whose art/backdrop was pushed - so a mere position tick doesn't re-invalidate the 360px backdrop */
     char np_last_title[sizeof st.title] = "", np_last_artist[sizeof st.artist] = "";
     /* screensaver + screen-off timeouts come from the Settings cyclers (index ->
      * seconds via TMAP), re-read each loop so changes apply live. */

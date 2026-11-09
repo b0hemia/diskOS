@@ -54,14 +54,14 @@ int  sd_write_begin(void); void sd_write_end(void);     /* SD write ownership (m
 #define NETART_MAX_RESP  (256 * 1024)
 #define NETART_MAX_IMG   (2 * 1024 * 1024)
 
-typedef struct { char track[512], artist[256], album[256], title[256]; unsigned gen; } na_job_t;
+typedef struct { char track[TRACK_PATH_MAX], artist[256], album[256], title[256]; unsigned gen; } na_job_t;
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_file_mu = PTHREAD_MUTEX_INITIALIZER;   /* prune vs touch: a picture in use is never removed */
 static na_job_t g_pending;               /* the latest request (latest wins)          (guarded) */
 static int g_has_pending, g_running;     /*                                           (guarded) */
 static unsigned g_gen;                   /* bumped by netart_cancel                   (guarded) */
-static char g_ready[512];                /* a picture became available for this song   (guarded) */
+static char g_ready[TRACK_PATH_MAX];                /* a picture became available for this song   (guarded) */
 static time_t g_offline_until;           /* network failed: no tries before this        (guarded) */
 
 static const char *const COUNTRY[] = { "CN", "TW", "US", "FR", "RU", "ES", "PL", "CZ", "DE", "JP", "KR", "TH", "IT" };

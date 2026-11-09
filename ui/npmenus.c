@@ -26,7 +26,7 @@ int ui_label_set_changed(lv_obj_t *obj, const char *txt);   /* ui.c: a label's t
 /* ---- shared current-track context (set from main.c) --------------------- */
 static char g_album[160];
 static char g_artist[160];
-static char g_path[256];
+static char g_path[TRACK_PATH_MAX];
 static int  g_fav, g_have, g_pos_id;
 static lv_obj_t *g_fav_lbl;
 static lv_obj_t *dim_row;   /* the Favourite row currently dimmed while casting (cleared when the panel is rebuilt) */
@@ -153,7 +153,7 @@ void npmenu_create(lv_obj_t *root){
 }
 
 /* ---- add-to-playlist picker (SCR_PLPICK) -------------------------------- */
-static char g_pick_path[256];
+static char g_pick_path[TRACK_PATH_MAX];
 /* what the picker adds: one song (g_pick_path; a CUE/ISO sub-track when g_pick_sub, by g_pick_track), or a whole
  * ALBUM/ARTIST/GENRE group (g_pick_col/g_pick_val, set by plpick_set_group) */
 static int  g_pick_sub, g_pick_track;

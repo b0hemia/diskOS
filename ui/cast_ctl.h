@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "cast_queue.h"
 #include "cast_session.h"
+#include "trackpath.h"
 /* Cast controller core (slice 14d): after the handoff reaches CASTING this owns the Cast queue and cursor and decides every later LOAD.
  * A pure step(event) -> action list: no threads, no LVGL, no sockets, no allocation per event (the queue and cursor allocate only when a
  * queue is built or replaced). The caller (14e: one worker plus the LVGL tick) feeds events and carries the actions out; the struct must
@@ -24,7 +25,7 @@ enum { CC_A_NONE = 0, CC_A_LOAD, CC_A_PLAY_AFTER_ADOPT, CC_A_STAY_PAUSED, CC_A_T
 enum { CC_T_NONE = 0, CC_T_LIST_FAILED /* "Couldn't play that list" */, CC_T_UPDATING /* "Queue is updating - try again" */,
        CC_T_COULD_NOT_PLAY /* "Receiver could not play this track" */, CC_T_QUEUE_FINISHED, CC_T_UNSUPPORTED, CC_T_NONE_PLAYABLE,
        CC_T_QUEUE_CHANGED /* "Queue changed" (14f) */ };   /* ids; the strings are slice 15/17 */
-typedef struct { int dur_ms; char title[MDB_STR], artist[MDB_STR], album[MDB_STR], path[256]; } cc_row;   /* what cb_serve_load_next and the facade need */
+typedef struct { int dur_ms; char title[MDB_STR], artist[MDB_STR], album[MDB_STR], path[TRACK_PATH_MAX]; } cc_row;   /* what cb_serve_load_next and the facade need */
 typedef struct {
     int type;
     uint32_t qgen, gen;             /* qgen: the queue generation the sender saw (0 = current). gen: the LOAD action's cursor gen (LOAD_STARTED / LOAD_REFUSED) */

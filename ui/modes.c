@@ -73,7 +73,7 @@ static const out_seq_t OUT_SEQ[3] = {
 static void modes_ui_refresh(void);
 static int g_out_route = OUT_INTERNAL;
 static unsigned g_out_gen = 0;
-static struct { int target, was_playing, full; unsigned gen; char path[256]; long pos; uint32_t t0, quiet0; lv_timer_t *tm; } g_osw;
+static struct { int target, was_playing, full; unsigned gen; char path[TRACK_PATH_MAX]; long pos; uint32_t t0, quiet0; lv_timer_t *tm; } g_osw;
 static int g_rec = 0; static unsigned g_rec_gen = 0; static lv_timer_t *g_rec_tm = NULL;
 
 static void out_set_state(int r){
