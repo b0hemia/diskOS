@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Install/restore orchestration for firmware acquisition (no GUI, never flashes).
 
 The user says which firmware the Disc runs; this layer turns that into a verified

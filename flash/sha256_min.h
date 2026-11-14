@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (c) 2026 diskOS contributors */
 /* sha256_min.h - freestanding SHA-256 (FIPS 180-4) for the DRAM NAND tools: no libc, no heap, streaming.
  * Used to hash NAND partitions on the device (fed one 2 KiB page at a time). Checked against Python's

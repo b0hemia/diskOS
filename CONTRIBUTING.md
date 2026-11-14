@@ -17,8 +17,8 @@ Contributions are welcome. Follow these rules for device safety and licensing.
 
 ## Licensing and provenance
 
-- The diskOS UI source in [`ui/`](ui/) is **GPL-3.0-or-later**; the project's installer and build
-  tooling are **MIT**. Bundled third-party components retain their own licenses; see [`NOTICE.md`](NOTICE.md).
+- diskOS is free software under the **GNU GPL v3.0 or later**: the UI in [`ui/`](ui/), the installer and
+  the build tooling. Bundled third-party components retain their own licenses; see [`NOTICE.md`](NOTICE.md).
   By contributing you agree your contribution is under the license that already governs the files
   you change. Please sign off your
   commits (`git commit -s`, Developer Certificate of Origin).

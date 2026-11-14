@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Build a flashable diskOS image from the user's OWN stock firmware.
 
 Faithful Python port of the proven mkdiskos.sh / extract_stock_rootfs.sh logic:

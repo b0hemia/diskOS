@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Locate the bundled native binaries and data files.
 
 Layout (in the source tree AND inside the PyInstaller bundle):

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* SetupAPI mock compiled with the complete production helper. No device access. */
 #include <stdint.h>
 #include <stdlib.h>

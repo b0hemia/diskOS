@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Firmware flow of the GUI (F1 slice 8): states 01-12, run tokens, cancel/retry, verified-only Install.
 Fake resolver/supervisor/scanner/browser; no network, no device."""
 import os

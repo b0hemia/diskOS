@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # Network-enabled preparation, separate from the offline build.
 # Requires rootless Podman, curl, gpgv, and the host ubuntu-keyring package.
 set -eu

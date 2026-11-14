@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (c) 2026 diskOS contributors
 """The build-time OTA option: default OFF, --no-ota is absolute, --ota-key bakes the given public key."""
 import base64

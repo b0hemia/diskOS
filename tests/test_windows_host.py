@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Host services only: no USB, image build or flash operations."""
 import ctypes
 import os

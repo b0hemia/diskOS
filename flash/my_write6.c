@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (c) 2026 diskOS contributors */
 /* my_write6.c - diskOS rootfs writer WITH an installed-base gate (X2000 Disc, GD5F2GM7 SPI-NAND, mask-ROM DRAM tool).
  *

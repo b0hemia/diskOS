@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Read-only inventory and raw diagnostic contracts, without Windows or USB."""
 import ctypes
 import json

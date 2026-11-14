@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Linux capability fallback uses a complete, checked pair for the process run."""
 from pathlib import Path
 import subprocess

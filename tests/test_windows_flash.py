@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Development flash gates and failure outcomes, with host/device calls mocked."""
 from contextlib import ExitStack
 import hashlib

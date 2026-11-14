@@ -74,6 +74,7 @@ Fresh installs and older versions use the installer.
 - Beam: one Disc volume press moves the receiver by one step, not two.
 - The AirPlay receiving screen stops redrawing while it is hidden or the screen is off.
 - Repeated Cast artwork requests reuse one prepared cover.
+- The installer and tools are now licensed under GPL-3.0-or-later, the same as the UI. Earlier releases stay under MIT; see NOTICE.md.
 
 ### Fixed
 

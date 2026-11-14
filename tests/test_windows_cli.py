@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Encoding and dependency regressions; no device or build actions."""
 import builtins
 import contextlib

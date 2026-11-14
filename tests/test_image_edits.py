@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """One edit phase on both filesystems, including hostile image namespaces."""
 import contextlib
 import hashlib

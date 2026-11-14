@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Exercise firmware guard installation and real rm behavior on disposable files."""
 import hashlib
 import os

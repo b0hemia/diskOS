@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (c) 2026 diskOS contributors
 # Reproducible build of the DRAM NAND tools (mask-ROM USB). Proves the recipe first: my_write5.c must rebuild
 # the shipped my_write5_dram.bin byte-for-byte, else nothing is written. Usage: sh build_nand.sh [outdir]

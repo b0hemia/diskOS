@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Isolated PCM export from stock libraries; media is inherited fd 4 only.
  * This program accepts no paths, URLs, output devices or codec names. */
 #define _GNU_SOURCE

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>

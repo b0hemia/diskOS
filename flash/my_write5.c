@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (C) 2026 diskOS contributors */
 /* my_write.c - SFC SPI-NAND WRITE primitive self-test for GD5F2GM7 (X2000 Disc).
  * Built on the PROVEN my_read.c framework (same SFC 0x7c cmd-index + CDT + clock/pins).
  * v1: SINGLE-BLOCK round-trip self-test on the INACTIVE ro2 slot - STRICTLY contained:

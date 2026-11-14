@@ -451,7 +451,7 @@ Notice copies, source archives and signatures must travel with their components.
 | CPython incorporated components | Ship both the Windows LICENSE and the whole incorporated-software section, plus the base PSF terms. |
 | Tcl/Tk data | Keep base and incorporated notices, icons.tcl and Tango legal code; omit images/ and mkpsenc.tcl. |
 | PyUSB/PyCryptodome | Preserve locked-wheel and native-source notice sidecars, including LibTomCrypt and SipHash terms. |
-| Microsoft runtime | Microsoft's redistribution conditions govern; the DLLs are outside the project's MIT/GPL grants. |
+| Microsoft runtime | Microsoft's redistribution conditions govern; the DLLs are outside the project's GPL grant. |
 | Dynamic libusb | Use exactly the pinned official DLL and ship matching source, signature and LGPL text. |
 | MSYS runtime | Preserve both DLL locations with the complete five-file notice set and authenticated source/signature sidecars. |
 | Artifact inventory | Require canonical notice bytes, exactly one pinned libusb DLL, Tk data exclusions and the GUI/CLI procedure in windows-qualification.md. |

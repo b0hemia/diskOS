@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Exercise the complete offline verifier with caller-supplied GnuPG spoofs."""
 import os
 from pathlib import Path

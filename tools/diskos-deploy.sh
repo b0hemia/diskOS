@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # diskos-deploy.sh - push a locally built mq_ui to the device and hot-reload it, safely.
 #
 # This is for iterating on UI changes. A hand-deployed binary reverts to the flashed build on the

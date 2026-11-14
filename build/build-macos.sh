@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # Offline release freeze. Build native tools separately with vendor/setup-macos.sh.
 set -euo pipefail
 cd "$(dirname "$0")/.."

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT - native harness, no USB I/O. */
+/* SPDX-License-Identifier: GPL-3.0-or-later - native harness, no USB I/O. */
 #define clock_gettime mock_clock_gettime
 #define nanosleep mock_nanosleep
 #define sleep mock_sleep

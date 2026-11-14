@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Private, stdin-gated Windows tool entry; never parses installer commands."""
 import json
 import ctypes

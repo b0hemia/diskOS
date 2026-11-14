@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # Offline, static x64 helper; takes only a new absolute output path at build time.
 set -euo pipefail
 [[ $# == 1 && $1 == /* && ! -e $1 && ! -L $1 ]] || {

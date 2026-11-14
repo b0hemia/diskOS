@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Stable, user-quotable error codes for the diskOS installer.
 
 Every user-facing failure carries a short code a beta tester can quote from a

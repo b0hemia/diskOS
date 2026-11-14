@@ -8,9 +8,9 @@ it over the device's POSIX message-queue IPC.
 Built with **LVGL 9.2.2** (software renderer) on a static-musl mipsel toolchain. This produces the
 `mq_ui` binary that the diskOS installer bakes into the flashed image.
 
-> **License:** this UI is **GPL-3.0-or-later** (see [`COPYING`](COPYING)). That is a deliberate,
-> different choice from the diskOS *installer/tooling*, which is MIT - the UI is the part meant to be
-> forked and kept open. Bundled third-party components keep their own licenses (see [License](#license)).
+> **License:** this UI is **GPL-3.0-or-later** (see [`COPYING`](COPYING)), the same as the rest of diskOS
+> (the installer and tools moved from MIT to GPL-3.0-or-later with 1.2.3). Bundled third-party
+> components keep their own licenses (see [License](#license)).
 
 ## Hardware target
 - **Display:** `/dev/fb0`, 360x360, 32bpp XRGB8888; partial redraws into the active page

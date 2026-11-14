@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Windowed entry: establish streams before importing the installer."""
 from contextlib import ExitStack
 import ctypes

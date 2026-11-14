@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # Sourced by install.sh. Probe Tk without opening a display.
 macos_python_ok() {
     "$1" -c 'import sys, tkinter; sys.exit(0 if sys.version_info >= (3, 8) and tkinter.TkVersion >= 8.6 else 1)' 2>/dev/null

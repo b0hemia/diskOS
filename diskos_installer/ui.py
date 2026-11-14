@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Terminal progress + messaging. TTY-aware: renders live bars/spinners on a
 terminal, and degrades to plain timestamped log lines when piped to a file so a
 saved log stays readable."""

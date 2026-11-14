@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """S97 retained-bundle verification under the pinned firmware's real BusyBox ash.
 
 Private paths replace production paths; the complete shipped supervisor and worker run.

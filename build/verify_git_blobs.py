@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Compare packaged inputs with raw committed blobs, without checkout filters."""
 import argparse
 from pathlib import Path, PurePosixPath

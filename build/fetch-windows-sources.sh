@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # Fetch release source assets outside the checkout; retain failed downloads.
 set -euo pipefail
 runtime_source=msys2-runtime-3.6.10-6.src.tar.zst

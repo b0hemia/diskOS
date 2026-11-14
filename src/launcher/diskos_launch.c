@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (c) 2026 diskOS contributors */
 /* diskos-launch: read-only launcher for the diskOS UI (installed at /opt/diskos/bin/diskos-launch).
  *

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """diskOS installer - cross-platform (Linux/macOS) installer for the FiiO Snowsky Disc.
 
 The whole tool is Python; the two bricking-sensitive operations (the Ingenic

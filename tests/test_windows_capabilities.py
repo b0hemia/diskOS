@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Host admission policy; all native and device operations are mocked."""
 from contextlib import ExitStack
 import io

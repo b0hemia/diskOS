@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # diskos-touch.sh - drive the device touchscreen over SSH (tap / swipe), for automated navigation.
 #
 # Coordinates are SCREEN coordinates (0..359, origin top-left) matching an upright screenshot from

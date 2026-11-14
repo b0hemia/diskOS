@@ -15,8 +15,7 @@
 
 <p align="center">
   <a href="docs/INSTALL.md#host-support"><img alt="Linux, macOS, and Windows" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-3D424B?style=flat-square"></a>
-  <a href="LICENSE"><img alt="Installer MIT" src="https://img.shields.io/badge/installer-MIT-D77868?style=flat-square"></a>
-  <a href="ui/COPYING"><img alt="UI GPL 3.0 or later" src="https://img.shields.io/badge/UI-GPL--3.0--or--later-8EAF93?style=flat-square"></a>
+  <a href="LICENSE"><img alt="GPL 3.0 or later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-8EAF93?style=flat-square"></a>
   <a href="https://ko-fi.com/b0hemia"><img alt="Support diskOS on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support%20diskOS-FF5E5B?style=flat-square&logo=ko-fi&logoColor=white"></a>
 </p>
 
@@ -255,11 +254,12 @@ Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 
 ## License and support
 
-The installer, scripts, and documentation are MIT licensed; see [LICENSE](LICENSE).
-The on-device UI source in [ui/](ui/) is GPL-3.0-or-later; see [ui/COPYING](ui/COPYING).
-The website HTML, CSS, JavaScript, and diskOS-owned screenshot images in [site/](site/)
-are MIT licensed under [LICENSE](LICENSE). This grant covers only rights held by diskOS
-contributors; third-party artwork and trademarks remain with their respective owners.
+diskOS is free software under the GNU GPL v3.0 or later; see [LICENSE](LICENSE). This covers the
+installer, scripts, documentation, the on-device UI in [ui/](ui/) and the website in [site/](site/).
+Third-party components keep their own licences (see [NOTICE.md](NOTICE.md)). Releases up to 1.2.2
+published the installer and tools under the MIT licence; see [NOTICE.md](NOTICE.md).
+The website grant covers only rights held by diskOS contributors; third-party artwork and
+trademarks remain with their respective owners.
 Website fonts retain their own licences; see [licenses/README.md](licenses/README.md#website-fonts).
 Third-party license details and corresponding source are listed in [NOTICE.md](NOTICE.md),
 [SPL_SOURCE.md](SPL_SOURCE.md), and [licenses/](licenses/).

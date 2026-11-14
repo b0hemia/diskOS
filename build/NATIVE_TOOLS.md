@@ -109,7 +109,7 @@ The Linux release uses static tools and has no `vendor/linux-x86_64/lib/` direct
 ## Durable flash identity helper
 
 `build/build-flashstate.sh` builds `payload/diskos-flashstate` from
-`src/flashstate/diskos_flashstate.c` (MIT). Set `CROSS` to the current
+`src/flashstate/diskos_flashstate.c` (GPL-3.0-or-later). Set `CROSS` to the current
 `mipsel-n2008-musl-cross/bin/mipsel-linux-musl-` prefix. It uses static musl,
 strips symbols and omits the linker build ID; two builds with the same toolchain
 must have identical SHA256 hashes. No host paths or build time are embedded.

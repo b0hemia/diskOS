@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Compile the real transport against native mocks; never open USB devices."""
 from pathlib import Path
 import os

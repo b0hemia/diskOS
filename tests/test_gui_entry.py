@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Windowed startup and inherited streams, without Windows or USB access."""
 from contextlib import ExitStack
 import errno

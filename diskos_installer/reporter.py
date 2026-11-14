@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Reporter interface - decouples the engine (imagebuild/flasher/state) from the
 front-end. The engine reports FACTS; it never touches widgets or prints directly.
 

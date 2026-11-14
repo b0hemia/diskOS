@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (c) 2026 diskOS contributors
 # Build the read-only boot launcher payload/diskos-launch (static 32-bit little-endian MIPS).
 #   CROSS=/path/to/mipsel-linux-musl-  build/build-launcher.sh

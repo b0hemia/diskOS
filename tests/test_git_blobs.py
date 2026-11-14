@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Offline checkout and raw-blob regression tests; no build or device."""
 import io
 import os

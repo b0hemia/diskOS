@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Streaming download of one pinned FiiO firmware ZIP into the verified cache.
 
 The bytes go straight into a cache-owned .part file in bounded chunks. This

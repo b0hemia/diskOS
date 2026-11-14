@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # Build Linux x86_64 squashfs tools with a private, source-pinned musl runtime.
 # Ubuntu prerequisites (already installed): gcc, make, binutils, curl, tar, xz,
 # file, sha256sum, Python 3. No root, distro development libraries or containers.

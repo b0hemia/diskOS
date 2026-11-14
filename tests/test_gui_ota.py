@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (c) 2026 diskOS contributors
 """GUI OTA checkbox: key detection and the checkbox -> no_ota mapping (no Tk needed)."""
 import os

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Supervised firmware acquisition: the download runs in a private helper process.
 
 DNS resolution and TCP connects cannot be interrupted from a thread, so the GUI

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* o32 NaN-2008 entry; no executable constructors or finalizers are used.
  * Shared-library initialization/finalization belongs to the stock loader. */
 .set noreorder

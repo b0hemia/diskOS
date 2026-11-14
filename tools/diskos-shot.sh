@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # diskos-shot.sh - capture the device screen to a PNG over SSH.
 #
 # The panel is 360x360, 32bpp, BGRA byte order, and mounted rotated 180 degrees, so we read the raw

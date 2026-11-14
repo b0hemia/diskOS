@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Stage the signed macOS app, corresponding source, notices and hashed archive."""
 import gzip
 import hashlib

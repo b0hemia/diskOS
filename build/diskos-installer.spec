@@ -191,7 +191,7 @@ if _os == "windows":
         CC0-1.0-SipHash.txt
         GPL-2.0-zstd.txt GPL-2.0.txt GPL-3.0.txt LGPL-2.1-libusb.txt
         LGPL-2.1.txt LICENSE-TJpgDec.txt LICENSE-dropbear.txt LZ4-LICENSE.txt
-        MIT-JSMN.txt MIT-LVGL.txt MIT-musl.txt MIT-qrcodegen.txt
+        MIT-JSMN.txt MIT-LVGL.txt MIT-musl.txt MIT-qrcodegen.txt MIT-diskos-pre-1.2.3.txt
         OFL-1.1-Archivo.txt OFL-1.1-CourierPrime.txt OFL-1.1-DSEG.txt OFL-1.1-Doto.txt
         OFL-1.1-FontAwesome.README.txt OFL-1.1-FontAwesome.txt
         OFL-1.1-IBMPlexMono.txt OFL-1.1-IBMPlexSans.txt OFL-1.1-Inter.txt

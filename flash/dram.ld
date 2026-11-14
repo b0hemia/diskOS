@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (c) 2026 diskOS contributors */
 /* DRAM NAND tools: body linked right after the 0x60-byte header+stub (dram_head.bin) loaded at 0xa0c00000.
  * The stub (at 0xa0c00030, the usbboot --start1 address) saves ra/sp, switches to a private stack at

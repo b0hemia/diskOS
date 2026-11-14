@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Per-user state so the tool can always put the device back to bone-stock and
 so `remove` can clean up after itself.
 

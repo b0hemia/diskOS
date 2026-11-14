@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef DISKOS_AUDIO_STOCK_WIRE_H
 #define DISKOS_AUDIO_STOCK_WIRE_H
 #include <stdint.h>

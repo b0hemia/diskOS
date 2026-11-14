@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Offline, externally hash-pinned macOS freeze inputs and runtime versions."""
 import hashlib
 import importlib.metadata

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Mask-ROM USB flashing - Python wrapper around the PROVEN native binaries
 (usbboot + the my_write6 DRAM NAND writer + the X2000 SPL). We do NOT reimplement
 the flashing protocol; we orchestrate it, watch it, and interpret the result.

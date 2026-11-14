@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Usage: py ram_pattern.py generate N file | compare expected readback.
 
 Offset-tagged SHA256 blocks detect corruption, repeated blocks and wrong lengths.
