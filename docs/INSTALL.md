@@ -5,7 +5,7 @@
 > [!CAUTION]
 > Flashing replaces the Disc's system software. Stored data is not wiped, and the SD card is not changed. Back up the card and keep a copy of the saved stock image on separate storage. Use a reliable USB cable, keep it connected, and keep the computer awake until flashing finishes. An interrupted flash may require [mask-ROM recovery](#restore-stock-and-recover).
 
-The installer builds an image locally from an official FiiO firmware archive. Select the version already on your Disc, then use **Get firmware** to download and verify its ZIP, or **Browse...** for a matching local copy. It accepts V2.09, V2.28, V2.40, and V2.57. 1.2.1 users can install the signed 1.2.2 app update if updates are allowed; fresh installs and older versions use the installer. App updates do not replace the boot install script. The network name hook, per-flash identity and boot-script update-retention fix require a full flash with the complete 1.2.2 installer; see the changes marked as requiring a full flash in the [release notes](RELEASE_NOTES_1.2.2.md).
+The installer builds an image locally from an official FiiO firmware archive. Select the version already on your Disc, then use **Get firmware** to download and verify its ZIP, or **Browse...** for a matching local copy. It accepts V2.09, V2.28, V2.40, and V2.57. 1.2.2 users can install the signed 1.2.3 app update from Settings > Device > Update diskOS if updates are allowed; fresh installs and older versions use the installer. The app includes its matching cover helper. The boot-log correction and newer image minimum require a full flash with the complete 1.2.3 installer. See [Upgrading to 1.2.3](#upgrading-to-123) for the update scope and earlier full-flash requirements.
 
 ## Requirements
 
@@ -324,6 +324,22 @@ The installer rebuilds and checks the stock image before writing. Never resume a
 guessed block or bypass a refusal. If you cannot establish the matching firmware version,
 keep the logs and get help. The Linux installer also accepts
 `restore-stock --firmware <zip>` with the same matching firmware.
+
+## Upgrading to 1.2.3
+
+1.2.2 users can install the signed 1.2.3 app update over Wi-Fi from Settings > Device >
+Update diskOS if updates are allowed. It includes the matching cover helper and delivers
+the 1.2.3 UI changes without a full flash. Fresh installs and older versions use the installer.
+App updates do not replace stock firmware, the boot script or the image's minimum update epoch.
+The boot-log correction and newer image minimum come with a full flash using the 1.2.3 installer.
+
+For a full flash, use the complete 1.2.3 installer and matching flash tools with your official
+firmware archive. Back up the card and keep your saved stock image first. Follow the installation
+steps above; the installer checks that the kernel and recovery match the selected firmware.
+Settings and music are kept, downloaded app updates are cleared, and the included UI starts.
+
+The network name hook, per-flash identity and boot-script update-retention fix introduced in
+1.2.2 require a full flash with 1.2.2 or later. See the historical guidance below.
 
 ## Upgrading to 1.2.2
 

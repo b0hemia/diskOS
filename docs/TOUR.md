@@ -121,11 +121,13 @@ If Wi-Fi is off, tap Wi-Fi settings to connect. Use Search again to refresh the 
 
 AirPlay PIN pairing uses a keypad on the Disc; enter the digits shown by the receiver and tap Pair. Successful pairing is remembered. If pairing fails before PIN entry, Beam keeps the failure on screen so you can try again. After a PIN or verification failure, Forget pairing clears the saved pairing before retrying. Password-protected AirPlay 1 receivers are not supported.
 
-While you beam, the Disc stays quiet. Play, pause, skip, seek, volume keys and the volume dial act on the receiver. Now Playing says "Beaming to" with its name, or "Paused -" with its name when paused. Before starting, set all three volume-key actions (Press, Double Press and Long Press) to Adjust Volume under Settings > Controls. If they need changing, the picker explains this before listing devices and its Controls button opens that category directly. You cannot change them to Switch Track during Beam.
+While you beam, the Disc stays quiet. Play, pause, skip, seek, volume keys and the volume dial act on the receiver. On V2.57, the physical play/pause key also pauses and resumes the Cast or AirPlay receiver when the key reader is available, without starting local playback. Other firmware keeps its previous key behavior. A press early in the handoff can cancel it. Now Playing says "Beaming to" with its name, or "Paused -" with its name when paused. Before starting, set all three volume-key actions (Press, Double Press and Long Press) to Adjust Volume under Settings > Controls. If they need changing, the picker explains this before listing devices and its Controls button opens that category directly. You cannot change them to Switch Track during Beam.
 
 Compatible AirPlay receivers show the track's cover, title, artist and progress. TV remotes can play, pause and skip to the next or previous track where supported. Cast and AirPlay covers update with the track; Beam waits up to 15 seconds for a cover that is not ready when playback starts.
 
 Library selections, Favourites, playlists and play modes control the remote queue. Up Next shows that queue and lets you jump to a track. During AirPlay beaming, hold an upcoming track for Play next, Remove from Up Next or Cancel. Unsupported entries show why they cannot play; automatic progression reports skipped tracks. Favourite toggles for the playing track are unavailable while beaming, lyrics follow the remote track, and Song Info hides the Disc's output sample rate. Cast listening can scrobble to Last.fm when enabled; AirPlay sending and receiving do not.
+
+A Cast receiver Stop keeps the same song stopped on the Disc. Disc Play reloads it from its last usable reported position, or its known start position; invalid retained positions fall back to zero. This can be earlier than the actual stop.
 
 Stop beaming ends the session. When the current track can continue on the Disc, it also resumes the last playback position once the receiver is known to have stopped. If Cast has no track to resume, the Disc stays paused. Cast also offers Play on Disc. After a different remote queue was selected, only the current track returns to the Disc. During AirPlay beaming, Play on Disc opens a confirmation: it can continue the original queue or, when that queue cannot be restored, play only the current track. Returning playback no longer briefly plays from 0:00 or flashes 0:00 on the clock. If stopping the receiver was not confirmed, the Disc warns that the TV may still be playing; stop it first. Choose Keep beaming to cancel the return while the session is active.
 
@@ -315,7 +317,7 @@ Switch a radio on its row, tap the row to open it, rescan, and tap a listed devi
 
 ### Settings: Display
 
-Display controls appearance and idle behavior. Changing theme or text size redraws the interface while music continues. Outdoor Mode holds a light appearance and full brightness until switched off, then restores the saved appearance and brightness.
+Display controls appearance and idle behavior. Changing theme or text size redraws the interface while music continues. Applying a theme can wait for radio work to settle; if it cannot complete, diskOS restores the previous choices and says "Couldn't apply the theme now". Outdoor Mode holds a light appearance and full brightness until switched off, then restores the saved appearance and brightness.
 
 #### Screen
 
@@ -390,6 +392,19 @@ Display controls appearance and idle behavior. Changing theme or text size redra
 
 The page opens with a battery summary with each reading on its own line: charge percentage, health, cycles and temperature. This is information, not a tappable row.
 
+Low-battery notices warn at 10% or below and 5% or below. Each warning rearms after charging
+to 12% or 7%, respectively; starting at 4% shows the 5% warning rather than both.
+A full-battery notice announces 100% after charging has been observed.
+
+On V2.40 and V2.57, a valid 0% reading while not charging shows "Battery empty" and starts
+a 30-second countdown. Turn off now skips the countdown, rereads the battery state, and
+follows the same playback-stop, card-drain and flush checks. Detected charging, a reading
+above 0%, or unavailable battery or charging evidence cancels the countdown. If the checks
+fail, diskOS keeps card access closed, withholds its power-off request and asks you to
+restart. A failure while the screen is off shows the restart notice when the screen wakes.
+This cannot prevent stock firmware or exhausted hardware from turning the Disc off. Other
+firmware gets notices without diskOS's empty-battery shutdown.
+
 | Row | Action and default |
 |---|---|
 | Charging Limit | Off by default; V2.57 can request the stock charging optimization, around 80%. |
@@ -433,7 +448,7 @@ The page opens with a battery summary with each reading on its own line: charge 
 | Row | Action and default |
 |---|---|
 | Restart | Confirm a restart; a busy card or failed flush can leave the device running with an error. |
-| Reset diskOS Settings | Confirm reset of diskOS appearance and behavior choices, both Disc names and paired-device nicknames; music, pairings, Wi-Fi, Bluetooth, Last.fm, EQ, and audio settings remain. |
+| Reset diskOS Settings | Confirm reset of diskOS appearance and behavior choices, both Disc names and paired-device nicknames; music, pairings, Wi-Fi, Bluetooth, Last.fm, EQ, and audio settings remain. A new reset restarts partly completed work from defaults. If Bluetooth is off, settings reset completes and nickname clearing waits until Bluetooth is turned on; the dialog explains the wait. |
 | Debug Mode | Off by default; enable temporary SSH over Wi-Fi with a new shown password. |
 
 ### Eight themes
@@ -485,12 +500,13 @@ With Weather on Home enabled, tap the glance to open Weather. "Weather unavailab
 
 ### Updates, startup, and power
 
-1.2.1 users can install the signed 1.2.2 app update over Wi-Fi from Settings > System >
-Update diskOS if updates are allowed. Fresh installs and older versions use the installer.
-The app update replaces only diskOS, not stock firmware or the whole image. It does not
-replace the boot install script. The network name hook, the per-flash identity and the
-boot-script update-retention fix require a full flash with the complete 1.2.2 installer; see the
-[release notes](RELEASE_NOTES_1.2.2.md).
+1.2.2 users can install the signed 1.2.3 app update over Wi-Fi from Settings > Device >
+Update diskOS if updates are allowed. It includes the matching cover helper and delivers
+the 1.2.3 UI changes without a full flash. Fresh installs and older versions use the installer.
+App updates do not replace stock firmware, the boot script or the image's minimum update epoch.
+The boot-log correction and newer image minimum come with a full flash using the 1.2.3 installer.
+The network name hook, per-flash identity and boot-script update-retention fix introduced in
+1.2.2 require a full flash with 1.2.2 or later; see the [1.2.2 release notes](RELEASE_NOTES_1.2.2.md).
 A download shows a progress bar with a percentage and a Cancel button, then Verifying and Saving.
 With Automatic Update Checks on, a new release is announced once; downloading still needs your tap.
 The release installer includes the diskOS release key by default; untick "Allow diskOS
@@ -507,15 +523,23 @@ website and installer.
 
 The stock player handles the physical power button: one press blanks the display and another restores it. Touch wakes diskOS idle dimming or Screen Off, but a panel put to sleep by the stock player needs the power button. On V2.57, one power-button press also wakes diskOS Screen Off. Button wake restores your diskOS brightness.
 
-When the sleep timer shuts the Disc down, or it powers off after being idle, with the screen on, the screen closes into the disc. A light travels once round the ring while the card is saved safely, and the screen fades to black when done. If saving cannot finish, the screen comes back. The power key is unchanged. The charging icon follows the stock player's charging report and disappears when full; idle power-off does not run while charging, with AirPlay Receiving or Bluetooth Receiving selected, or using USB DAC or USB Storage. These idle holds do not cancel an explicit sleep-timer shutdown.
+When the sleep timer shuts the Disc down, or it powers off after being idle, with the screen on, the screen closes into the disc. A light travels once round the ring while the card is saved safely, and the screen fades to black when done. If saving cannot finish, the screen comes back. When the player announces a power-key shutdown, diskOS stops new card work, stops cover helpers and image previews, and attempts to drain and flush pending work before the player turns off. It joins a shutdown already in progress and uses the closing animation when the screen is on. It cannot guarantee flushing finishes before stock shutdown. If the player restarts, card access resumes and the library is checked again. Announcement behavior on every older firmware remains unverified. The charging icon follows the stock player's charging report and disappears when full; idle power-off does not run while charging, with AirPlay Receiving or Bluetooth Receiving selected, or using USB DAC or USB Storage. These idle holds do not cancel an explicit sleep-timer shutdown.
 
-The physical play/pause button controls playback through the stock player. The Volume Up and Volume Down keys adjust volume by default, or switch tracks according to the V2.57 Vol Keys settings. The separate Screensaver, Screen Off, Sleep Timer, and Idle Power-off choices control later idle behavior. For USB Storage, eject the card safely on the computer before changing modes; diskOS can refuse the switch when card ownership is uncertain.
+The physical play/pause button controls local playback through the stock player. While beaming on V2.57, it pauses and resumes the Cast or AirPlay receiver when the key reader is available; other firmware keeps its previous key behavior. The Volume Up and Volume Down keys adjust volume by default, or switch tracks according to the V2.57 Vol Keys settings. The separate Screensaver, Screen Off, Sleep Timer, and Idle Power-off choices control later idle behavior. For USB Storage, eject the card safely on the computer before changing modes; diskOS can refuse the switch when card ownership is uncertain.
 
 ### Limits
 
 The scanner indexes common music formats and also recognizes AAC, OGG, OPUS, APE, AIFF/AIF, WMA, DSF,
 DFF, DTS, external CUE sheets, and SACD ISO tracks; indexing a format does not ensure the stock
 player can play it. V2.09 playlist and book playback may fail.
+
+diskOS carries complete absolute track paths of up to 1023 bytes through the library,
+playback display, lyrics, Song Info, playlists, artwork and Beam, including audiobook resume
+and play history. Oversized paths are refused or skipped instead of cut short. An oversized
+current-track report shows Track unavailable / Path too long. Sidecar artwork also needs
+room for its filename. This is diskOS's path capacity; actual playback and the stock player's
+reporting limit at that length remain unverified on each firmware. The separate stock folder
+command still has a 511-byte payload limit.
 
 Some mono FLAC, MP3, and Opus files can play slowed down, taking about twice as long
 in the stock player. diskOS checks briefly for a missed track advance while the screen

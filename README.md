@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <a href="https://b0hemia.github.io/diskos/">Website</a> |
+  <a href="https://b0hemia.github.io/diskOS/">Website</a> |
   <a href="#see-diskos">Screenshots</a> |
   <a href="#before-you-install">Before you install</a> |
   <a href="#install">Install</a> |
@@ -113,8 +113,8 @@ the macOS app and Windows release ZIP include their runtime and tools. The insta
 root filesystem image on your computer; this project does not distribute FiiO's root filesystem.
 Back up your music, keep a separate copy of the saved stock image, and read the [full requirements](docs/INSTALL.md#requirements).
 
-For 1.2.1 users, see [Update, restore, recover](#update-restore-recover) for the signed app
-update and changes that require a **full flash** with the complete 1.2.2 installer.
+For 1.2.2 users, see [Update, restore, recover](#update-restore-recover) for the signed 1.2.3 app
+update and changes that require a **full flash** with the complete 1.2.3 installer.
 The installer checks the selected firmware and the Disc before it writes.
 If it refuses a firmware archive, use a matching unmodified official ZIP.
 Read the on-screen message before retrying a failed flash.
@@ -185,16 +185,17 @@ and [RECOVERY.txt](RECOVERY.txt) for errors and recovery.
 
 ## Update, restore, recover
 
-From 1.2.1, Settings > System > Update diskOS can install the signed 1.2.2 app update
-over Wi-Fi if updates are allowed. Fresh installs and older versions use the installer.
-It updates only the diskOS app, not stock firmware or the whole image, and does not change
-how old a saved app update the system image allows. A full flash with the complete 1.2.2
-installer starts the diskOS version inside that installer and clears downloaded diskOS updates;
-settings and music are kept. The network name hook, the per-flash identity and the boot-script
-update-retention fix also require a full flash;
-see the [release notes](docs/RELEASE_NOTES_1.2.2.md).
+1.2.2 users can install the signed 1.2.3 app update over Wi-Fi from Settings > Device >
+Update diskOS if updates are allowed. It includes the matching cover helper and delivers
+the 1.2.3 UI changes without a full flash. Fresh installs and older versions use the installer.
+App updates do not replace stock firmware, the boot script or the image's minimum update epoch.
+The boot-log correction and newer image minimum come with a full flash using the 1.2.3 installer.
+A full flash starts the included diskOS version and clears downloaded app updates; settings
+and music are kept. The network name hook, per-flash identity and boot-script update-retention
+fix introduced in 1.2.2 also require a full flash with 1.2.2 or later;
+see the [1.2.2 release notes](docs/RELEASE_NOTES_1.2.2.md).
 The 1.2.3 release image includes the diskOS release key by default. Turn updates off
-on the Disc, or untick **Allow diskOS updates over Wi-Fi** when flashing. See [upgrading](docs/INSTALL.md#upgrading-to-122).
+on the Disc, or untick **Allow diskOS updates over Wi-Fi** when flashing. See [upgrading](docs/INSTALL.md#upgrading-to-123).
 
 To use the stock interface without reflashing, set **Settings > Device > Default UI > Stock**.
 Holding **Volume Up** from power-on boots the other interface once: Stock when diskOS is the
