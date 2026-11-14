@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (c) 2026 diskOS contributors
 # diskOS update verifier - the security-critical core (POSIX sh, portable to the device's
 # busybox+openssl 1.1.1). This is the reference logic that ports into S97 and the RO fexecve

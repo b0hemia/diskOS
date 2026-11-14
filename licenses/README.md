@@ -37,8 +37,8 @@ bundles. See `../NOTICE.md` for the component->license mapping and the static-li
 | Windows Tcl/Tk 8.6.15 | Tcl-Tk permissive and incorporated terms; Tango script declares CC BY-SA 3.0 | CPython's Tcl base notice matches supplied upstream Tcl 8.6.15 after newline normalization. [`Tk-8.6.15-license.terms.txt`](Tk-8.6.15-license.terms.txt) is the exact-install Tk text. Tcl incorporated texts: [`Tcl-8.6.15-regex-NOTICE.txt`](Tcl-8.6.15-regex-NOTICE.txt), [`Tcl-8.6.15-libtommath-LICENSE.txt`](Tcl-8.6.15-libtommath-LICENSE.txt), [`Tcl-8.6.15-Bison-NOTICE.txt`](Tcl-8.6.15-Bison-NOTICE.txt), [`Tcl-8.6.15-zlib-LICENSE.txt`](Tcl-8.6.15-zlib-LICENSE.txt). Tk native and runtime script headers: [`Tk-8.6.15-Incorporated-NOTICES.txt`](Tk-8.6.15-Incorporated-NOTICES.txt). Startup-required icons.tcl keeps [`CC-BY-SA-3.0-Tango.txt`](CC-BY-SA-3.0-Tango.txt). Windows builds exclude images/ and mkpsenc.tcl, including Adobe EPS procsets and glyph data |
 | Microsoft VC runtime 14.42.34438.0 | Microsoft Distributable Code redistributed with CPython 3.12.10 | CPython's "Additional Conditions for this Windows binary build" are shipped verbatim at Windows notice lines 283-320. Microsoft's terms govern; [Visual Studio 2022 redistribution list](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution), "Visual C++ Runtime Files". Microsoft components remain under Microsoft's terms, outside this project's licences. Redistributors must satisfy Microsoft's conditions; the "licensed Visual Studio user" condition is a separate Microsoft-terms question. |
 | MSYS2 runtime 3.6.10 (both packaged copies) | LGPL-3.0-or-later with Cygwin linking exception; newlib/BSD/per-file terms | Full five-file notice set indexed in [`windows/README.md`](windows/README.md) |
-| Archivo (MIT installer GUI: pre-rendered titles in `diskos_installer/assets/display*.png` and lettering in `wordmark*.png`) | OFL-1.1 (font) | [`LICENSE-archivo-OFL.txt`](../diskos_installer/assets/LICENSE-archivo-OFL.txt) |
-| Michroma (MIT installer GUI: pre-rendered section kickers in `diskos_installer/assets/display*.png`) | OFL-1.1 (font) | [`LICENSE-michroma-OFL.txt`](../diskos_installer/assets/LICENSE-michroma-OFL.txt) |
+| Archivo (installer GUI: pre-rendered titles in `diskos_installer/assets/display*.png` and lettering in `wordmark*.png`) | OFL-1.1 (font) | [`LICENSE-archivo-OFL.txt`](../diskos_installer/assets/LICENSE-archivo-OFL.txt) |
+| Michroma (installer GUI: pre-rendered section kickers in `diskos_installer/assets/display*.png`) | OFL-1.1 (font) | [`LICENSE-michroma-OFL.txt`](../diskos_installer/assets/LICENSE-michroma-OFL.txt) |
 | LVGL (diskOS UI) | MIT | [`MIT-LVGL.txt`](MIT-LVGL.txt) (verbatim from `../ui/lvgl/LICENCE.txt`) |
 | FreeType 2.13.3 (diskOS UI, new in 1.2.1) | FreeType License (FTL) | [`FTL-FreeType.txt`](FTL-FreeType.txt) (verbatim from `../ui/third_party/freetype-2.13.3/docs/FTL.TXT`) |
 | dlg headers retained in FreeType's include tree, Copyright (c) 2019 nyorain | BSL-1.0 | [`BSL-1.0-dlg.txt`](BSL-1.0-dlg.txt) (standard complete BSL-1.0 text, byte-identical to the copy GCC ships as `libphobos/src/LICENSE_1_0.txt`) |
@@ -268,14 +268,20 @@ sidecar for tk86t.dll/_tkinter.pyd and all three crypto sidecars for any
 Crypto/**/*.pyd.
 
 ## diskOS's own license
-The **Python installer, build scripts, and docs** are licensed **MIT** - `Copyright (c) 2026 diskOS
-contributors`. See [`../LICENSE`](../LICENSE). The installer GUI is MIT tooling; the
+diskOS is free software under the **GNU GPL v3.0 or later** (`../LICENSE`); third-party components keep
+their own licences (see [`../NOTICE.md`](../NOTICE.md)). The **Python installer, build scripts, and docs**
+are licensed **GPL-3.0-or-later** - `Copyright (c) 2026 diskOS contributors`. Releases up to 1.2.2 published
+them under MIT; that text is kept as [`MIT-diskos-pre-1.2.3.txt`](MIT-diskos-pre-1.2.3.txt). The one
+MIT exception is the stock-audio helper (`../ui/audio_stock_wire.h`, `../ui/tools/audio_stock_start.S`,
+`../ui/tools/diskos_audiodec.c`, `../ui/third_party/build-stock-audiodec.sh`, see
+`../ui/tools/AUDIO_STOCK_LICENSE`): it loads the Disc's stock FFmpeg, which FiiO configured with
+`--enable-nonfree`, so it stays MIT on purpose. The installer GUI is GPL tooling; the
 Archivo and Michroma font notices for its pre-rendered lettering are linked above
 and ship beside `display*.png`, `wordmark*.png` and `disc*.png` in
 `../diskos_installer/assets/`. The disc illustration contains no font lettering.
 No fonts are installed on the computer. The **diskOS UI source** (`ui/`, built to
 `payload/mq_ui`) is licensed **GPL-3.0-or-later** (`GPL-3.0.txt`, `../ui/COPYING`; (c) diskOS
-contributors) - deliberately separate from the MIT tooling so UI forks stay open. The UI is based in part on the work of the FreeType Team.
+contributors), the same licence as the tooling since 1.2.3. The UI is based in part on the work of the FreeType Team.
 Its embedded third-party notices - LVGL (MIT), SQLite (public domain), JSMN (MIT), md5 (public domain), and
 Montserrat / Source Han Sans / Font Awesome / IBM Plex Mono / Doto and the theme fonts (Inter, DSEG7 Classic, JetBrains Mono, Space Grotesk, IBM Plex Sans, Nunito, Courier Prime, Rubik Glitch, Archivo) (OFL-1.1) - ship in this directory and in
 `../ui/licenses/`.
@@ -283,9 +289,9 @@ Montserrat / Source Han Sans / Font Awesome / IBM Plex Mono / Doto and the theme
 ## Website
 
 The HTML, CSS, JavaScript, and diskOS-owned screenshot images in `../site/` are
-MIT licensed under [`../LICENSE`](../LICENSE), Copyright (c) 2026 diskOS contributors.
+GPL-3.0-or-later under [`../LICENSE`](../LICENSE), Copyright (c) 2026 diskOS contributors.
 This grant covers only rights held by diskOS contributors; third-party artwork and
-trademarks remain with their respective owners. The UI source remains GPL-3.0-or-later.
+trademarks remain with their respective owners.
 
 ### Website fonts
 
@@ -308,4 +314,4 @@ texts ship beside them in `../site/fonts/`; their upstream copyrights are retain
 Special Elite's embedded copyright notice reads: Copyright (c) 2010 by Brian J.
 Bonislawsky DBA Astigmatic (AOETI). All rights reserved. Available under the Apache
 2.0 licence. The font retains that notice in its name table; the full Apache-2.0
-text is shipped alongside it. These font licences do not change the website's MIT grant.
+text is shipped alongside it. These font licences do not change the website's GPL grant.

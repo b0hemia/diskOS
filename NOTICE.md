@@ -7,7 +7,7 @@ their own licences, as listed below.
 
 diskOS releases up to and including 1.2.2 were published with the installer and tools under the MIT
 licence (the text is kept in `licenses/MIT-diskos-pre-1.2.3.txt`). From 1.2.3 everything the project
-wrote is GPL-3.0-or-later. Portions contributed by outside authors under MIT remain available under
+wrote is GPL-3.0-or-later, except the stock-audio helper described below. Portions contributed by outside authors under MIT remain available under
 the MIT notice in that text:
 
 - commit `44ad3ce` (Chthome Luii; Arch, CachyOS and Fedora support): `README.md`,
@@ -277,8 +277,7 @@ in `site/fonts/`; see [the font index](licenses/README.md#website-fonts).
   runtime (MIT). stb_image is NOT part of `mq_ui`.
 
   **`diskos-audiodec`** (source `ui/tools/diskos_audiodec.c`, new in 1.2.2) is a small helper that decodes audio
-  for Cast and AirPlay sending. It is diskOS's own code (SPDX `GPL-3.0-or-later` in the helper sources since 1.2.3; releases up to 1.2.2 shipped them under MIT, see
-  `ui/tools/AUDIO_STOCK_LICENSE`) and is embedded inside the `mq_ui` binary, which is GPL-3.0-or-later; `mq_ui`
+  for Cast and AirPlay sending. It is diskOS's own code (SPDX `MIT`, covered by `ui/tools/AUDIO_STOCK_LICENSE`; it stays MIT on purpose, see below) and is embedded inside the `mq_ui` binary, which is GPL-3.0-or-later; `mq_ui`
   writes it out at run time. It links **dynamically** against the FFmpeg libraries (`libavformat`, `libavcodec`,
   `libavutil`) that are already installed on the Disc in FiiO's firmware. Only FFmpeg's public headers (4.2.2,
   checked by SHA-256 in `ui/third_party/build-stock-audiodec.sh`) are used to compile it.
@@ -286,6 +285,11 @@ in `site/fonts/`; see [the font index](licenses/README.md#website-fonts).
   macros used here fall within LGPL-2.1 section 5. The licence text is supplied in
   `licenses/LGPL-2.1.txt`. No FFmpeg implementation source files are compiled into
   the helper, and no FiiO shared libraries are redistributed.
+
+  **MIT exception.** The stock-audio helper (`ui/audio_stock_wire.h`, `ui/tools/audio_stock_start.S`,
+  `ui/tools/diskos_audiodec.c` and `ui/third_party/build-stock-audiodec.sh`) stays MIT on purpose,
+  because it loads the Disc's stock FFmpeg libraries, which FiiO configured with `--enable-nonfree`.
+  See `ui/tools/AUDIO_STOCK_LICENSE`. Everything else the project wrote is GPL-3.0-or-later.
 
   The built `mq_ui` binary statically incorporates these third-party components, whose licenses
   apply to the shipped binary (and whose source ships in `ui/` / `ui/lvgl/`):
