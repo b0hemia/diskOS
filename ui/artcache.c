@@ -2,6 +2,7 @@
 /* Copyright (C) 2026 diskOS contributors */
 #include "sdio.h"
 #include "artcache.h"
+#include "track_path.h"
 #include "art.h"
 #include "artstore.h"
 #include <stdlib.h>
@@ -200,11 +201,13 @@ void artcache_accent_key(const art_picture_id *picture,char *out,int cap){
     snprintf(out,cap,"%s",key);
 }
 void artcache_protect(int group,const char *const *tracks,int n){ artstore_protect(group,tracks,n); }
+uint64_t artcache_pin_key(const char *track){ return artstore_pin_key(track); }
+void artcache_protect_keys(int group,const uint64_t *keys,int n){ artstore_protect_keys(group,keys,n); }
 /* Resolution metadata is separate from legacy BMPs: a legacy entry cannot
  * establish picture equality. Disk metadata only supplies a known candidate to
  * the helper, which hashes the current payload before trusting it. */
 #define RES_MAX 128
-static struct { char track[512]; art_resolution value; } resolutions[RES_MAX];
+static struct { char track[TRACK_PATH_MAX]; art_resolution value; } resolutions[RES_MAX];
 static pthread_mutex_t res_mu = PTHREAD_MUTEX_INITIALIZER;
 static unsigned res_next;
 static uint64_t res_epoch = 1;
@@ -278,9 +281,9 @@ int artcache_revalidate(const char *track, const art_resolution *displayed){
     if(track[0] && !proof.revision[0] && artcache_resolution(track, &cached)) proof = cached;
     int changed = source_changed(track, &proof, media);
     for(unsigned i=0; !changed && i<RES_MAX; i++){
-        char path[512]; art_resolution proof;
+        char path[TRACK_PATH_MAX]; art_resolution proof;
         pthread_mutex_lock(&res_mu);
-        snprintf(path, sizeof path, "%.511s", resolutions[i].track);
+        { size_t used = strnlen(resolutions[i].track, sizeof path - 1); memcpy(path, resolutions[i].track, used); path[used] = 0; }
         proof = resolutions[i].value;
         int current = proof.epoch == res_epoch;
         pthread_mutex_unlock(&res_mu);

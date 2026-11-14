@@ -58,6 +58,7 @@ custom_gif_status custom_gif_apply(const char *src, custom_gif_decode_fn decode)
 typedef enum { CUSTOM_STILL_IDLE, CUSTOM_STILL_PENDING, CUSTOM_STILL_UNRESOLVED, CUSTOM_STILL_DONE } custom_still_state;
 custom_gif_status custom_still_start(const char *src);   /* OK = started; else refused with nothing changed */
 void custom_still_tick(void);
+int custom_still_waiting(void);
 custom_still_state custom_still_poll(custom_gif_status *result);   /* DONE reports the result once */
 
 /* Read-only checks for the SD picker (custom_saver_picker.c), so the list never offers what apply would refuse.

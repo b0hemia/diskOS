@@ -2,9 +2,12 @@
 /* Copyright (C) 2026 diskOS contributors */
 #ifndef ARTCACHE_H
 #define ARTCACHE_H
+#include <stdint.h>
 #include "art_identity.h"
 void artcache_accent_key(const art_picture_id *picture, char *out, int cap);
 void artcache_protect(int group, const char *const *tracks, int n);
+uint64_t artcache_pin_key(const char *track);
+void artcache_protect_keys(int group, const uint64_t *keys, int n);
 int artcache_accent_candidate(const char *track, const char *key, char *out, int cap);
 int artcache_background_skip(const char *track, const char *key);
 /* Worker-only bounded migration/reclamation, called with a stable library snapshot. */

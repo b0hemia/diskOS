@@ -93,3 +93,4 @@ const char *fw_gain_tag(void){
 /* V2.40/V2.57 report source changes to /ui. V2.09/V2.28 use the socket only
  * (P240 0x4e8078; P209 0x496f0c; P228 0x4d9b10). Backend presence is insufficient. */
 int fw_airplay_receiver(void){ int v = fw_os_ver(); return v == 240 || v == 257; }
+int fw_beam_interlock(void){ return fw_os_ver() == 257; }

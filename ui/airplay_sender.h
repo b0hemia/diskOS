@@ -11,6 +11,8 @@ typedef struct {
     int (*teardown)(unsigned generation);
     void (*say)(ho_msg);
     void (*notice)(pb_cmd);
+    int (*lock)(unsigned generation);   /* optional beam interlock (NULL = off), see cast_handoff.h */
+    int (*unlock)(void);
 } aps_config;
 typedef struct {
     const char *cancel_reason; /* Diagnostic only; suppress duplicate cancel requests. */
@@ -19,7 +21,7 @@ typedef struct {
     uint32_t serial, now, deadline, terminate_at, kill_at, fault_at;
     unsigned skipped, unsupported_choice, queue_changed;
     int stream_ready, format_pending, input_mode, input_pos_id;
-    unsigned input_generation; uint64_t input_token; char input_path[256];
+    unsigned input_generation; uint64_t input_token; char input_path[TRACK_PATH_MAX];
     unsigned player_generation; int source, mode, pos_id, local_id, local_ord, rate, bits, forget_next, volume, have_volume;
     rd_receiver target; pb_remote_state view;
 } aps_sender;

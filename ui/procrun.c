@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "procrun.h"
+#include "ui_wake.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -22,6 +23,7 @@ static struct job {
 } jobs[PROC_SLOTS];
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wake = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t completed = PTHREAD_COND_INITIALIZER;
 static unsigned serial;
 static int running;
 static int notify[2] = {-1, -1};
@@ -40,7 +42,11 @@ static void finish(struct job *j, int result){
     if(j->pid > 0){ kill(-j->pid, SIGKILL); kill(j->pid, SIGKILL); }
     if(j->fd >= 0){ close(j->fd); j->fd = -1; }
     j->out[j->n] = 0;
-    pthread_mutex_lock(&mu); j->done = result; pthread_mutex_unlock(&mu);
+    pthread_mutex_lock(&mu);
+    j->done = result;
+    pthread_cond_broadcast(&completed);
+    pthread_mutex_unlock(&mu);
+    ui_notify(UI_WAKE_BT);
 }
 static void launch(struct job *j){
     int f[2]; j->started = 1;
@@ -179,4 +185,18 @@ void proc_cancel(unsigned id){
         jobs[i].cancel = 1; signal_worker(); break;
     }
     pthread_mutex_unlock(&mu);
+}
+int proc_wait(unsigned id, char *out, int cap){
+    if(!id || cap<1) return PROC_FAILED;
+    pthread_mutex_lock(&mu);
+    for(;;){
+        struct job *j=NULL;
+        for(int i=0;i<PROC_SLOTS;i++) if(jobs[i].id==id && !jobs[i].consumed) j=&jobs[i];
+        if(!j){pthread_mutex_unlock(&mu);out[0]=0;return PROC_FAILED;}
+        if(j->done) break;
+        pthread_cond_wait(&completed,&mu);
+    }
+    /* Only this caller owns the handle. Poll performs the existing consume. */
+    pthread_mutex_unlock(&mu);
+    return proc_poll(id,out,cap);
 }

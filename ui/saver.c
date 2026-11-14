@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+#include "ui_wake.h"
 /* Copyright (C) 2026 diskOS contributors */
 #include "indic.h"
 #include "screens.h"
@@ -32,6 +33,7 @@ int ui_label_set_changed(lv_obj_t *obj, const char *txt);
 LV_FONT_DECLARE(font_weather16)
 static lv_font_t s_swfont;   /* montserrat_16 + weather-icon fallback */
 
+static lv_timer_t *g_analog_timer;
 static lv_obj_t *g_bg;
 static lv_obj_t *g_clock;
 static void saver_clock_style_cb(lv_event_t *e);   /* refits the time when the theme changes its face */
@@ -253,6 +255,7 @@ static void *vinyl_worker(void *arg)
         free(g_vres);                                   /* an older, never-collected result */
         g_vres = buf; g_vres_gen = gen; g_vres_ready = 1;
         pthread_mutex_unlock(&g_vmu);
+        ui_notify(UI_WAKE_SHARP);
     }
     return NULL;
 }
@@ -371,7 +374,7 @@ static int sharp_retained(void)
 static void vinyl_poll(lv_timer_t *t)
 {
     pthread_mutex_lock(&g_vmu);
-    if (!g_vres_ready) { pthread_mutex_unlock(&g_vmu); return; }
+    if (!g_vres_ready) { pthread_mutex_unlock(&g_vmu); lv_timer_pause(t); return; }
     uint8_t *buf = g_vres; unsigned gen = g_vres_gen;
     g_vres = NULL; g_vres_ready = 0;
     pthread_mutex_unlock(&g_vmu);
@@ -417,8 +420,7 @@ void sharp_cover_request(void)
         pthread_cond_signal(&g_vcv);
         g_vasked_gen = g_vgen;
         g_vpending = 1;
-        lv_timer_reset(g_vpoll);
-        lv_timer_resume(g_vpoll);
+        /* Completion notification readies the paused UI timer. */
     } else if (++g_vfails >= VIN_RETRIES) g_vasked_gen = g_vgen;
     pthread_mutex_unlock(&g_vmu);
 }
@@ -877,7 +879,7 @@ void saver_create(lv_obj_t *root)
 
     g_style = saver_resolve_style(cfg_get_int("saver_style", 0));   /* not on screen yet: Custom builds nothing here */
     relayout(g_style);
-    lv_timer_create(saver_anim_cb, 1000, NULL);   /* analog seconds hand */
+    g_analog_timer=lv_timer_create(saver_anim_cb, 1000, NULL); lv_timer_pause(g_analog_timer);   /* analog seconds hand */
 }
 
 /* repaint the saver's accent-bearing decorations (analog second hand + hub, vinyl
@@ -1120,4 +1122,12 @@ void saver_set_track(const char *title, const char *artist, const void *backdrop
             lv_obj_add_flag(g_bg, LV_OBJ_FLAG_HIDDEN);   /* no track -> no backdrop art */
         }
     }
+}
+
+void sharp_cover_deliver(void){if(g_vpoll)vinyl_poll(g_vpoll);}
+
+void saver_poll_sync(int lit){
+    if(!g_analog_timer)return;
+    if(lit && screen_current()==SCR_SAVER && g_style==1)lv_timer_resume(g_analog_timer);
+    else lv_timer_pause(g_analog_timer);
 }

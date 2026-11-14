@@ -373,6 +373,20 @@ int screen_modal_open(void)
     return 0;
 }
 
+/* A dialog, menu or other panel that takes touch: screen_modal_open() without the volume overlay, which is a status
+ * readout that must not stop a ring seek, rim scroll or cover-flow drag that starts outside it. */
+int screen_dialog_open(void)
+{
+    lv_obj_t *top = lv_layer_top();
+    uint32_t n = lv_obj_get_child_count(top);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t *o = lv_obj_get_child(top, (int32_t)i);
+        if (ui_volume_panel_is(o)) continue;
+        if (!lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) && lv_obj_has_flag(o, LV_OBJ_FLAG_CLICKABLE)) return 1;
+    }
+    return 0;
+}
+
 /* The press landed on a control that owns a drag of its own: a slider, an arc or roller, or a container that scrolls
  * sideways (the Custom EQ strip). Such a press keeps today's time-limited Back rule: a fast slide still goes Back, a
  * slow one is the control's. */

@@ -24,7 +24,7 @@ enum { CC_A_NONE = 0, CC_A_LOAD, CC_A_PLAY_AFTER_ADOPT, CC_A_STAY_PAUSED, CC_A_T
 enum { CC_T_NONE = 0, CC_T_LIST_FAILED /* "Couldn't play that list" */, CC_T_UPDATING /* "Queue is updating - try again" */,
        CC_T_COULD_NOT_PLAY /* "Receiver could not play this track" */, CC_T_QUEUE_FINISHED, CC_T_UNSUPPORTED, CC_T_NONE_PLAYABLE,
        CC_T_QUEUE_CHANGED /* "Queue changed" (14f) */ };   /* ids; the strings are slice 15/17 */
-typedef struct { int dur_ms; char title[MDB_STR], artist[MDB_STR], album[MDB_STR], path[256]; } cc_row;   /* what cb_serve_load_next and the facade need */
+typedef struct { int dur_ms; char title[MDB_STR], artist[MDB_STR], album[MDB_STR], path[TRACK_PATH_MAX]; } cc_row;   /* what cb_serve_load_next and the facade need */
 typedef struct {
     int type;
     uint32_t qgen, gen;             /* qgen: the queue generation the sender saw (0 = current). gen: the LOAD action's cursor gen (LOAD_STARTED / LOAD_REFUSED) */
@@ -55,9 +55,12 @@ struct cast_ctl {
     cast_ctl_deps d; cc_slot s[2]; int a;
     int active, pend, known, playing, settle, wp, orph, out, prior, stopped;   /* pend/known: a LOAD is out / its load_seq is reported; playing: receiver playing intent; wp: play after adopt;
                                                                    * out: set around one cursor move while the receiver holds media this move abandons; prior: the pending LOAD replaced something that may still sit on the receiver */
+    int last_ms, last_known;   /* last receiver position of the CURRENT occurrence: set by ENTER / each LOAD (its start), then by every owned PLAYING / PAUSED / BUFFERING sample (taken as is, so a backward seek lowers it); never by IDLE samples. Unknown only if no usable value exists */
     uint32_t qgen, pgen, now, pdue; unsigned pseq;   /* orph: an older LOAD may still land (its queue was replaced) */
     cc_row row;
 };
+/* Numeric/live-state validation only; identity remains the controller's responsibility. dur_ms <= 0 means unknown. */
+int  cast_ctl_position_usable(const cc_ev *e, int dur_ms);
 void cast_ctl_init(cast_ctl *c, const cast_ctl_deps *d);
 /* Returns the number of actions written to out (0..CC_ACT_MAX). */
 int  cast_ctl_step(cast_ctl *c, const cc_ev *e, cc_act out[CC_ACT_MAX]);

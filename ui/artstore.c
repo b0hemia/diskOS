@@ -41,7 +41,19 @@ static pthread_mutex_t pin_mu=PTHREAD_MUTEX_INITIALIZER;
 static uint64_t pin_epoch;
 static pthread_once_t store_once=PTHREAD_ONCE_INIT;
 static sqlite3 *store_db;
-static char protected_tracks[3][96][512];
+/* Pinned tracks are kept as a 64-bit FNV-1a key of the whole path (0 = empty slot): a copy of a path that may be
+ * over 1000 bytes would cost 144 KiB, and a cut copy would never match the full database path. A collision only
+ * protects one extra picture, which is the safe direction. */
+static uint64_t protected_tracks[3][96];
+static uint64_t pin_key(const char *s){
+    if(!s || !*s) return 0;
+    uint64_t h=UINT64_C(14695981039346656037);
+    for(; *s; s++){
+        h^=(unsigned char)*s;
+        h*=UINT64_C(1099511628211);
+    }
+    return h ? h : 1;
+}
 static struct { char key[24]; uint64_t tick; } touches[128];
 static unsigned touch_next;
 static uint64_t touch_clock;
@@ -135,12 +147,21 @@ static int store_open(int create){
     }
     return 1;
 }
+uint64_t artstore_pin_key(const char *track){ return pin_key(track); }
+void artstore_protect_keys(int group,const uint64_t *keys,int n){
+    if(group<0 || group>=3) return;
+    pthread_mutex_lock(&pin_mu);
+    pin_epoch++;
+    memset(protected_tracks[group],0,sizeof protected_tracks[group]);
+    for(int i=0;i<n && i<96;i++) protected_tracks[group][i]=keys[i];
+    pthread_mutex_unlock(&pin_mu);
+}
 void artstore_protect(int group,const char *const *tracks,int n){
     if(group<0 || group>=3) return;
     pthread_mutex_lock(&pin_mu);
     pin_epoch++;
     memset(protected_tracks[group],0,sizeof protected_tracks[group]);
-    for(int i=0;i<n && i<96;i++) if(tracks[i]) snprintf(protected_tracks[group][i],512,"%s",tracks[i]);
+    for(int i=0;i<n && i<96;i++) protected_tracks[group][i]=pin_key(tracks[i]);
     pthread_mutex_unlock(&pin_mu);
 }
 static void touched(const char *key){
@@ -163,9 +184,10 @@ static int pinned(sqlite3_int64 id){
     int yes=0; sqlite3_bind_int64(q,1,id);
     while(!yes && sqlite3_step(q)==SQLITE_ROW){
         const char *track=(const char*)sqlite3_column_text(q,0);
+        uint64_t key=pin_key(track);
         pthread_mutex_lock(&pin_mu);
         for(int g=0;g<3;g++) for(int i=0;i<96;i++)
-            if(track && protected_tracks[g][i][0] && !strcmp(track,protected_tracks[g][i])) yes=1;
+            if(key && protected_tracks[g][i]==key) yes=1;
         pthread_mutex_unlock(&pin_mu);
     }
     sqlite3_finalize(q); return yes;

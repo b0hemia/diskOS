@@ -129,12 +129,14 @@ static pthread_mutex_t g_wmu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_wcv = PTHREAD_COND_INITIALIZER;
 static unsigned g_wgen, g_wac_gen;              /* g_wac_gen: artcache_gen() when the request was made */
 static int g_wstarted, g_wbusy, g_wwant, g_wready, g_widx;
-static char g_wpaths[6][512];
+static char g_wpaths[6][TRACK_PATH_MAX];
 static int g_wn;
 static sprite_t g_wres;
 static unsigned g_wres_gen, g_wres_ac_gen;
 static uint64_t g_wlibrary,g_wmedia,g_wres_library,g_wres_media;
-static char g_wall_pins[96][512];
+/* Cover Flow pins as whole-path keys (artcache_pin_key), not path copies: 96 x TRACK_PATH_MAX would be 96 KiB of BSS.
+ * A key collision only protects one extra picture; a cut path copy could never match the full database path. */
+static uint64_t g_wall_pins[96];
 static unsigned g_wall_pin_next;
 
 static void aw_pixels_free(sprite_t *sp){
@@ -152,10 +154,14 @@ static void aw_cancel(void){
 static void *aw_worker(void *arg){
     (void)arg;
     for(;;){
-        char paths[6][512]; int n, idx; unsigned gen, ac_gen; uint64_t library,media;
+        int n, idx; unsigned gen, ac_gen; uint64_t library,media;
+        /* heap, not this worker's stack: 6 x TRACK_PATH_MAX; on failure the request publishes "no cover" (n = 0) */
+        char (*paths)[TRACK_PATH_MAX];
         pthread_mutex_lock(&g_wmu);
         while(!g_wwant) pthread_cond_wait(&g_wcv, &g_wmu);
-        memcpy(paths, g_wpaths, sizeof paths); n = g_wn; idx = g_widx; gen = g_wgen; ac_gen = g_wac_gen;
+        paths = malloc(sizeof g_wpaths);
+        if(paths) memcpy(paths, g_wpaths, sizeof g_wpaths);
+        n = paths ? g_wn : 0; idx = g_widx; gen = g_wgen; ac_gen = g_wac_gen;
         library=g_wlibrary; media=g_wmedia;
         g_wwant = 0;
         pthread_mutex_unlock(&g_wmu);
@@ -188,7 +194,7 @@ static void *aw_worker(void *arg){
             }else aw_pixels_free(&sp);
             break;
         }
-        free(src);
+        free(src); free(paths);
         pthread_mutex_lock(&g_wmu);
         g_wbusy = 0;
         if(gen == g_wgen){ g_wres = sp; g_wres_gen = gen; g_wres_ac_gen = ac_gen; g_wres_library=library; g_wres_media=media; g_wready = 1; }
@@ -403,7 +409,7 @@ static void aw_seed_cb(lv_timer_t *t){
         for(int pass = 0; pass < 2; pass++){
             int found = 0;
             for(int i=0;i<m;i++){
-                char track[512]; track[0]=0;
+                char track[TRACK_PATH_MAX]; track[0]=0;
                 int ready=mdb_song_path(ids[i],track,sizeof track);
                 if(ready<0){ lv_timer_set_period(t,2000); return; }
                 if(ready>0 && track[0]){
@@ -522,10 +528,9 @@ static int aw_prefetch_step(unsigned g){
                     pthread_mutex_unlock(&g_wmu); return 1;
                 }
                 for(int i=0;i<g_wn;i++){
-                    snprintf(g_wall_pins[g_wall_pin_next++%96],512,"%.511s",g_wpaths[i]);
+                    g_wall_pins[g_wall_pin_next++%96]=artcache_pin_key(g_wpaths[i]);
                 }
-                const char *pins[96]; for(int i=0;i<96;i++) pins[i]=g_wall_pins[i];
-                artcache_protect(2,pins,96);
+                artcache_protect_keys(2,g_wall_pins,96);
                 g_wlibrary=ipc_library_epoch(); g_wmedia=sd_io_generation();
                 g_widx = sp->idx; g_wac_gen = g; sp->asked = 1; g_wbusy = g_wwant = 1;
                 pthread_cond_signal(&g_wcv);

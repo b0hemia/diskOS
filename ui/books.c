@@ -65,6 +65,7 @@ static void book_row_cb(lv_event_t *e){
     /* re-read the bookmark, completion AND its age now (the list snapshot may be stale if the book
      * finished or advanced since the screen was built) so we resume at the LATEST saved position, and
      * restart a finished book from the beginning rather than its last-second tail. */
+    if(!g_books[i].path[0]){ ui_toast("Path too long"); return; }   /* the library path did not fit: refuse, never a prefix */
     long pos = 0, updated = 0; int completed = 0;
     int r = mdb_book_progress(g_books[i].path, NULL, 0, &pos, &completed, &updated);
     if(r < 0){ ui_toast("Couldn't read progress"); return; }   /* read error -> don't start a session that could erase the bookmark */

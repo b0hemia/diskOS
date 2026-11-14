@@ -42,6 +42,7 @@ static void handle(cast_ctl *c, cast_action a, cc_act *o, int *n){
         return;
     }
     if(a.kind == CA_LOAD){
+        c->last_ms = a.start_ms; c->last_known = a.start_ms >= 0;   /* a new LOAD: the occurrence's position is where it starts */
         c->stopped = 0; c->prior = c->pend || c->orph || c->out; c->pend = 1; c->known = 0; c->pgen = a.gen; c->wp = c->playing; c->orph = 0; c->pdue = c->now + (uint32_t)c->d.load_ms;
         x = put(o, n, CC_A_LOAD); x->k = a.k; x->start_ms = a.start_ms; x->skipped = a.skipped; x->qgen = c->qgen; x->gen = a.gen; x->row = &c->row;
         x->queue_pos = s->cur.pos + 1; x->queue_len = s->q.n;
@@ -61,7 +62,7 @@ static void republish(cast_ctl *c, cc_act *o, int *n){
     x->playing = c->wp; x->start_ms = (int)(s->cur.base * 1000.0); x->media_id = s->cur.media_id;
 }
 static void release_all(cast_ctl *c){
-    drop(&c->s[0]); drop(&c->s[1]); c->active = c->pend = c->known = c->playing = c->settle = c->wp = c->orph = c->out = c->prior = c->stopped = 0; c->qgen++;
+    drop(&c->s[0]); drop(&c->s[1]); c->active = c->pend = c->known = c->playing = c->settle = c->wp = c->orph = c->out = c->prior = c->stopped = c->last_ms = c->last_known = 0; c->qgen++;
 }
 static int select_(cast_ctl *c, const cc_ev *e, cc_act *o, int *n){
     int t = 1 - c->a, r;
@@ -83,12 +84,33 @@ static int select_(cast_ctl *c, const cc_ev *e, cc_act *o, int *n){
     c->out = 0;
     return 0;
 }
+/* The position a stopped occurrence resumes at: the last receiver position kept in c->last_ms, or 0 when none is usable (never set, negative, or
+ * past the known duration). IDLE samples never feed it (their currentTime is not trusted), so a Stop reports the last live sample, up to one
+ * SNAPSHOT period behind the real stop. */
+static int stop_ms(const cast_ctl *c){
+    int d = c->s[c->a].cur.dur_ms;
+    return c->last_known && c->last_ms >= 0 && (d <= 0 || c->last_ms <= d) ? c->last_ms : 0;
+}
 static void stopped(cast_ctl *c, cc_act *o, int *n){
     cast_cursor *u = &c->s[c->a].cur;
     c->stopped = 1; c->playing = c->wp = c->settle = 0;
     u->media_id = 0; /* consume this media once, keep pos/order (including duplicate songs) */
     republish(c, o, n);
-    o[*n - 1].kind = CC_A_STOPPED; o[*n - 1].start_ms = 0;
+    o[*n - 1].kind = CC_A_STOPPED; o[*n - 1].start_ms = stop_ms(c);
+}
+int cast_ctl_position_usable(const cc_ev *e, int dur_ms){
+    return (e->player == CS_PL_PLAYING ||
+            e->player == CS_PL_PAUSED ||
+            e->player == CS_PL_BUFFERING) &&
+           e->media_time >= 0 && e->media_time < 1e6 &&
+           (dur_ms <= 0 || e->media_time <= dur_ms / 1000.0);
+}
+/* Keep the receiver position only from a usable live sample: validated before it replaces the retained one, so a bad report never destroys a good one. */
+static void retain_position(cast_ctl *c, const cc_ev *e){
+    if(cast_ctl_position_usable(e, c->s[c->a].cur.dur_ms)){
+        c->last_ms = (int)(e->media_time * 1000.0);
+        c->last_known = 1;   /* as reported: a backward seek lowers it (prog only ever rises) */
+    }
 }
 static void snapshot(cast_ctl *c, const cc_ev *e, cc_act *o, int *n){
     cast_cursor *u = &c->s[c->a].cur; cc_act *x;
@@ -98,6 +120,7 @@ static void snapshot(cast_ctl *c, const cc_ev *e, cc_act *o, int *n){
             if(e->load_state == CS_JOB_OK && e->media_id > 0){
                 cast_cursor_adopted(u, c->pgen, e->media_id); c->pend = 0;
                 if(e->player == CS_PL_IDLE && e->idle == CS_IDLE_CANCELLED){ stopped(c, o, n); return; }
+                retain_position(c, e);
                 if(c->wp){ x = put(o, n, CC_A_PLAY_AFTER_ADOPT); x->qgen = c->qgen; x->gen = c->pgen; c->settle = 1; }
                 republish(c, o, n);
                 return;
@@ -113,6 +136,7 @@ static void snapshot(cast_ctl *c, const cc_ev *e, cc_act *o, int *n){
     if(e->media_id <= 0 || e->media_id != u->media_id) return;   /* not the owned media (or already consumed: a duplicate FINISHED) */
     if(e->player == CS_PL_IDLE && e->idle == CS_IDLE_CANCELLED){ stopped(c, o, n); return; }
     cast_cursor_progress(u, u->gen, e->media_id, e->media_time);
+    retain_position(c, e);
     if(e->player == CS_PL_PLAYING){ c->playing = 1; c->settle = 0; }
     else if(e->player == CS_PL_PAUSED && !c->settle) c->playing = 0;
     else if(e->player == CS_PL_IDLE) handle(c, cast_cursor_finished(u, u->gen, e->media_id, e->idle, e->media_time), o, n);
@@ -127,6 +151,7 @@ int cast_ctl_step(cast_ctl *c, const cc_ev *e, cc_act out[CC_ACT_MAX]){
         memset(e->q, 0, sizeof *e->q);   /* moved: the caller must not free it */
         c->a = 0; c->active = 1; c->qgen++; c->pend = c->known = c->settle = 0; c->playing = c->wp = e->was_playing != 0;
         cast_cursor_attach_playing(&s->cur, e->start_ms, e->media_id, e->dur_ms);
+        c->last_ms = e->start_ms; c->last_known = e->start_ms >= 0;
         if(!row_of(c, s->cur.order[s->cur.pos])) republish(c, out, &n);
         return n;
     }
@@ -136,7 +161,7 @@ int cast_ctl_step(cast_ctl *c, const cc_ev *e, cc_act out[CC_ACT_MAX]){
     cast_cursor *u = &c->s[c->a].cur;
     switch(e->type){
     case CC_EV_PLAY:
-        if(c->stopped && !c->pend){ c->playing = 1; handle(c, cast_cursor_play(u, 0), out, &n); }
+        if(c->stopped && !c->pend){ c->playing = 1; handle(c, cast_cursor_play(u, stop_ms(c)), out, &n); }   /* the same occurrence, at the stopped position */
         break;
     case CC_EV_SNAPSHOT: snapshot(c, e, out, &n); break;
     case CC_EV_LOAD_STARTED: case CC_EV_LOAD_REFUSED:

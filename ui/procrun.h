@@ -9,5 +9,7 @@ enum { PROC_COMPLETE=1, PROC_FAILED, PROC_TIMED_OUT, PROC_TRUNCATED, PROC_CANCEL
  * A consumed result retains its slot until its child has been reaped. */
 unsigned proc_start(const char *cmd, int timeout_ms, int cap);
 int proc_poll(unsigned handle, char *out, int cap);
+/* Worker callers only: condition wait, consumed exactly once like proc_poll. */
+int proc_wait(unsigned handle, char *out, int cap);
 void proc_cancel(unsigned handle);
 #endif

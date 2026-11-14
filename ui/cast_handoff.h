@@ -60,6 +60,12 @@ typedef struct {
     void (*set_cast)(void *ctx, const pb_cast_state *c);   /* NULL = LOCAL */
     void (*message)(void *ctx, ho_msg m);
     int  (*local_teardown)(void *ctx);             /* guarded reselect: 0 queued, -1 failed, IPC_SEND_DEFERRED pending */
+    /* Optional beam interlock (NULL = off: firmware where it is not verified). local_lock puts the player in NO_WORK_MODE
+     * (NO_WORK_MODE) so the stock play/pause key cannot start the Disc; local_unlock restores Local (the Local reselect). Both
+     * return like local_teardown. The machine sends the lock once PCM is proven closed, confirms it by a fresh closed-PCM hold,
+     * keeps it through CASTING and STOPPING and sends the unlock on every exit (finish()), retrying while LOCAL. */
+    int  (*local_lock)(void *ctx);
+    int  (*local_unlock)(void *ctx);
 } ho_sink;
 typedef struct { int sent; uint32_t quiet_since; } ho_drain;
 /* Zero per attempt. Caller owns pause, generation/source checks and deadline.
@@ -68,17 +74,35 @@ typedef struct { int sent; uint32_t quiet_since; } ho_drain;
  * only a queued frame sets sent, so at most one teardown frame is enqueued. */
 int ho_drain_step(ho_drain *d, uint32_t now, int playing, int pcm_closed,
                   int (*send)(void *), void *ctx);
+#define HO_UNLOCK_RETRY_MS 250   /* a refused or deferred unlock is retried this often while LOCAL ... */
+#define HO_UNLOCK_TRIES    20    /* ... after this many failed tries one diagnostic is logged; the unlock stays owed and keeps retrying */
 typedef struct {
     ho_state state; uint32_t attempt, deadline, quiet_since, loud_since;
     int was_playing, pause_sent, engaged, facade, user_stop, src;   /* engaged: LOAD sent, the receiver may hold our media */
-    ho_drain drain;
+    ho_drain drain, lock;                          /* drain: Local reselect; lock: the interlock send + its closed-PCM hold */
+    int lock_phase, unlock_due, unlock_tries; uint32_t unlock_next, clock;   /* clock = the last tick the machine saw */
     ho_msg after;                                  /* message once a STOPPING ends */
     unsigned gen; uint64_t token; long pos, dur;
-    char path[256], title[256], artist[160], album[160], dest[48];
+    char path[TRACK_PATH_MAX], title[256], artist[160], album[160], dest[48];
 } ho;
 void     ho_init(ho *h);
 ho_state ho_get(const ho *h);
 uint32_t ho_attempt(const ho *h);
+/* The physical play/pause key. A press is exactly EV_KEY (1), code 250, value 1; value 0 (release) and 2 (repeat: one press must be
+ * one toggle) and every other code (268 long, 269 double press of the play key, volume codes) are not. */
+#define HO_KEY_PLAYPAUSE 250
+int      ho_key_is_press(unsigned type, unsigned code, int value);
+typedef enum {
+    HO_KEY_PASS = 0,   /* not ours: the stock player handles it (no beam, preparing, or the interlock is off) */
+    HO_KEY_REMOTE,     /* exactly one receiver toggle; never a local frame */
+    HO_KEY_HELD,       /* before the media is controllable: the pending PLAY intent was flipped, no frame at all */
+    HO_KEY_DROP,       /* ending: swallowed, never replayed into Local or a later beam */
+    HO_KEY_ABORT       /* pause/interlock not complete: the lock is not proven, the caller cancels the handoff */
+} ho_key_act;
+/* interlock_on: the caller's firmware switch (fwcaps). Only HO_KEY_HELD mutates the machine. */
+ho_key_act ho_key_route(ho *h, int interlock_on);
+int      ho_interlocked(const ho *h);                                   /* the lock frame was sent and has not been released */
+void     ho_unlock_retry(ho *h, uint32_t now, const ho_sink *k);        /* LOCAL only: resend a refused unlock */
 void     ho_step(ho *h, uint32_t now, const ho_event *ev, const ho_sink *k);   /* ev may be NULL: time only */
 /* The quiet-confirmation technique shared with the output switch (modes.c): *since = 0 while playing or not proven quiet, else
  * the tick the quiet began. Returns 1 once quiet has held for hold_ms. Wrap-safe. */

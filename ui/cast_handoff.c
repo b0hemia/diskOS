@@ -32,8 +32,15 @@ static void enter(ho *h, ho_state s, uint32_t now, uint32_t ms){ h->state = s; h
 static int due(const ho *h, uint32_t now){ return (int32_t)(now - h->deadline) >= 0; }
 /* the one exit: serving revoked, session released, facade LOCAL (after any remote STOP the caller sent first). Nothing here
  * touches the local player. */
+static void unlock_try(ho *h, const ho_sink *k){
+    if(!k->local_unlock) { h->unlock_due = 0; return; }
+    if(k->local_unlock(k->ctx) == 0){ h->unlock_due = 0; h->unlock_tries = 0; return; }
+    h->unlock_due = 1; h->unlock_next = h->clock + HO_UNLOCK_RETRY_MS;
+}
 static void finish(ho *h, const ho_sink *k, ho_msg m){
     k->revoke(k->ctx); k->release(k->ctx);
+    if(h->lock.sent == 1 || h->unlock_due){ h->unlock_tries = 0; unlock_try(h, k); }   /* every exit restores Local, after any remote STOP */
+    memset(&h->lock, 0, sizeof h->lock); h->lock_phase = 0;
     if(h->facade){ k->set_cast(k->ctx, NULL); h->facade = 0; }
     h->engaged = h->pause_sent = h->user_stop = 0;
     h->state = HO_LOCAL;
@@ -63,7 +70,8 @@ static void on_local(ho *h, uint32_t now, const ho_local *l, const ho_sink *k){
     }
     if(l->generation != h->gen){ teardown(h, now, k, HO_MSG_RESTARTED, 1, 1, "player generation changed"); return; }
     /* clear_track adds one epoch; extra epochs mean another item was loaded. */
-    if((!l->have_track && (h->drain.sent != 1 || l->token != h->token + UINT64_C(1))) ||
+    if((!l->have_track && (h->drain.sent != 1 || l->token < h->token + UINT64_C(1) ||
+                          l->token > h->token + (h->lock.sent == 1 ? UINT64_C(2) : UINT64_C(1)))) ||   /* the interlock may unload once more */
        (l->have_track && (l->token != h->token || strcmp(l->path ? l->path : "", h->path) != 0))){ teardown(h, now, k, HO_MSG_CHANGED, 1, 1, "track changed"); return; }
     if(h->state == HO_PAUSING){
         /* Keep the last media snapshot: teardown deliberately unloads the track. */
@@ -71,6 +79,12 @@ static void on_local(ho *h, uint32_t now, const ho_local *l, const ho_sink *k){
         int drained = ho_drain_step(&h->drain, now, l->playing, l->pcm_quiet, k->local_teardown, k->ctx);
         if(drained < 0){ teardown(h, now, k, HO_MSG_BUSY, 0, 1, "local pause not confirmed"); return; }
         if(!drained) return;
+        if(k->local_lock){   /* PCM is closed: now the interlock, confirmed by its own closed-PCM hold; it gets a fresh pause window */
+            if(!h->lock_phase){ h->lock_phase = 1; h->deadline = now + HO_PAUSE_MS; }
+            int locked = ho_drain_step(&h->lock, now, l->playing, l->pcm_quiet, k->local_lock, k->ctx);
+            if(locked < 0){ teardown(h, now, k, HO_MSG_BUSY, 0, 1, "interlock not confirmed"); return; }
+            if(!locked) return;
+        }
         if(k->serve_load(k->ctx, h->attempt, h->path, h->pos) < 0){ teardown(h, now, k, HO_MSG_FAILED, 0, 1, "load failed"); return; }
         h->engaged = 1; enter(h, HO_LOCAL_PAUSED, now, HO_LOAD_MS);
     } else if((h->state == HO_LOCAL_PAUSED || h->state == HO_REMOTE_READY) && (l->playing || !l->pcm_quiet))
@@ -80,7 +94,7 @@ static void on_select(ho *h, uint32_t now, const ho_event *ev, const ho_sink *k)
     const ho_local *l = ev->local;
     if(h->state != HO_LOCAL) return;   /* double select / select while busy: ignored */
     if(!l || !l->have_track || !l->sd_ok || !l->path || !l->path[0]){ k->message(k->ctx, HO_MSG_UNAVAILABLE); return; }
-    memset(&h->drain, 0, sizeof h->drain);
+    memset(&h->drain, 0, sizeof h->drain); memset(&h->lock, 0, sizeof h->lock); h->lock_phase = 0;   /* a pending unlock is kept: it is still owed */
     h->attempt++; h->was_playing = l->playing != 0; h->gen = l->generation; h->src = l->source_mode; h->token = l->token; h->pos = l->position_ms; h->dur = l->duration_ms;
     snprintf(h->path, sizeof h->path, "%s", l->path);
     snprintf(h->title, sizeof h->title, "%s", l->title ? l->title : "");
@@ -108,7 +122,31 @@ static void on_timeout(ho *h, uint32_t now, const ho_sink *k){
     default: break;
     }
 }
+int ho_key_is_press(unsigned type, unsigned code, int value){ return type == 1 /* EV_KEY */ && code == HO_KEY_PLAYPAUSE && value == 1; }
+int ho_interlocked(const ho *h){ return h->lock.sent == 1; }
+ho_key_act ho_key_route(ho *h, int interlock_on){
+    if(!interlock_on) return HO_KEY_PASS;
+    switch(h->state){
+    case HO_PAUSING: return HO_KEY_ABORT;   /* the stock handler may already act: the lock is not proven yet */
+    case HO_LOCAL_PAUSED: case HO_REMOTE_READY:
+        if(!ho_interlocked(h)) return HO_KEY_PASS;
+        h->was_playing = !h->was_playing;   /* the user's toggle decides whether the confirmed media is played */
+        return HO_KEY_HELD;
+    case HO_CASTING: return ho_interlocked(h) ? HO_KEY_REMOTE : HO_KEY_PASS;
+    case HO_STOPPING: return ho_interlocked(h) ? HO_KEY_DROP : HO_KEY_PASS;
+    default: return HO_KEY_PASS;   /* LOCAL, PREPARING: local intent; REMOTE_READY re-checks the Disc state */
+    }
+}
+void ho_unlock_retry(ho *h, uint32_t now, const ho_sink *k){
+    h->clock = now;
+    if(!h->unlock_due || h->state != HO_LOCAL || (int32_t)(now - h->unlock_next) < 0) return;
+    if(h->unlock_tries < HO_UNLOCK_TRIES &&
+       ++h->unlock_tries == HO_UNLOCK_TRIES)
+        fprintf(stderr, "AirPlay/Cast handoff unlock still pending\n");
+    unlock_try(h, k);
+}
 void ho_step(ho *h, uint32_t now, const ho_event *ev, const ho_sink *k){
+    h->clock = now;
     if(h->state != HO_LOCAL && h->state != HO_CASTING && due(h, now)) on_timeout(h, now, k);   /* deadline first: a late event never advances */
     if(!ev) return;
     if(ev->type >= HO_EV_REMOTE_READY && ev->type <= HO_EV_TAKEOVER && (h->state == HO_LOCAL || ev->attempt != h->attempt)) return;   /* stale */

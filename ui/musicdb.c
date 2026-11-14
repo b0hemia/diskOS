@@ -241,6 +241,13 @@ int mdb_song_accent_fresh(const char *path, const char *cover_key){
     }
     return fresh;
 }
+/* Copy a library path into a caller buffer only when ALL of it fits. A path cut short can name a
+ * different real file, so an overflow reads as "no such path" (out emptied), never a prefix. */
+static int path_fits(char *out, int cap, const char *src){
+    if(!src) src = "";
+    if(strlen(src) >= (size_t)cap){ out[0] = 0; return 0; }
+    memcpy(out, src, strlen(src) + 1); return 1;
+}
 /* prewarm iterator: next SONG with ID > after_id, ordered by ID (covers ALL rows,
  * not just the in-memory cap). Fills *id and path. Returns 1 if a row was found.
  * Each call owns a read-only connection; never waits on the UI connection mutex. */
@@ -252,7 +259,7 @@ int mdb_prewarm_next(int after_id, int *id, char *path, int cap){
         if(sqlite3_step(st) == SQLITE_ROW){
             if(id) *id = sqlite3_column_int(st, 0);
             const char *p = (const char*)sqlite3_column_text(st, 1);
-            if(path && cap>0) snprintf(path, cap, "%s", p ? p : "");
+            if(path && cap>0) path_fits(path, cap, p);   /* too long for the caller: empty, never a prefix */
             found = 1;
         }
         sqlite3_finalize(st);
@@ -602,7 +609,7 @@ int mdb_song_path(int id, char *out, int cap){
     if(sqlite3_prepare_v2(d,"SELECT PATH FROM SONG WHERE ID=? LIMIT 1;",-1,&st,NULL)!=SQLITE_OK) return -1;
     sqlite3_bind_int(st,1,id);
     int rc=sqlite3_step(st), found=-1;
-    if(rc==SQLITE_ROW){ snprintf(out,cap,"%s",colt(st,0)); found=out[0] ? 1 : 0; }
+    if(rc==SQLITE_ROW){ path_fits(out,cap,colt(st,0)); found=out[0] ? 1 : 0; }
     else if(rc==SQLITE_DONE){ out[0]=0; found=0; }
     sqlite3_finalize(st);
     return found;
@@ -1816,7 +1823,7 @@ int mdb_love_path(int love_id, char *out, int cap){
     if(sqlite3_prepare_v2(d, "SELECT PATH FROM MY_LOVE WHERE ID=?1;", -1, &st, NULL) != SQLITE_OK) return 0;
     sqlite3_bind_int(st, 1, love_id);
     int ok = 0;
-    if(sqlite3_step(st) == SQLITE_ROW){ snprintf(out, cap, "%s", colt(st,0)); ok = out[0] != 0; }
+    if(sqlite3_step(st) == SQLITE_ROW){ path_fits(out, cap, colt(st,0)); ok = out[0] != 0; }
     sqlite3_finalize(st); return ok;
 }
 
@@ -1924,7 +1931,7 @@ int mdb_books(book_t *out, int max){
         b->id = sqlite3_column_int(st, 0);
         snprintf(b->title,  MDB_STR, "%s", colt(st, 1));
         snprintf(b->author, MDB_STR, "%s", colt(st, 2));
-        snprintf(b->path, sizeof b->path, "%s", colt(st, 3));
+        path_fits(b->path, sizeof b->path, colt(st, 3));   /* too long: empty (the Books screen refuses it), never a prefix */
         b->position_ms = (long)sqlite3_column_int64(st, 4);
         b->completed   = sqlite3_column_int(st, 5);
         trim(b->title); trim(b->author);
@@ -3251,7 +3258,7 @@ static int song_resolve(const char *entry, char *out, int cap, int *herr){
         else rc = sqlite3_step(st);
         if(rc == SQLITE_ROW){
             const char *pth = (const char*)sqlite3_column_text(st, 0);   /* NULL = OOM conversion error, not a real empty path */
-            if(pth && pth[0]){ snprintf(out, cap, "%s", pth); got = 1; }
+            if(pth && pth[0]){ got = path_fits(out, cap, pth); }   /* too long for the caller: no match, never a prefix */
             else if(herr)*herr=1;
         } else if(rc != SQLITE_DONE && herr)*herr=1;      /* a step error, not a clean no-match */
         if(sqlite3_finalize(st) != SQLITE_OK && herr)*herr=1;   /* a deferred error surfaces at finalize */
@@ -3261,7 +3268,7 @@ static int song_resolve(const char *entry, char *out, int cap, int *herr){
     /* strip a leading "/" or "./" so a relative entry ("Album/Track.flac") reads as a path suffix */
     const char *rel = entry; while(rel[0]=='/' || (rel[0]=='.' && rel[1]=='/')) rel += (rel[0]=='/')?1:2;
     if(!rel[0]) return 0;
-    char esc[600], like[608];
+    char esc[2 * TRACK_PATH_MAX], like[2 * TRACK_PATH_MAX + 2];
     /* 1) most-specific: the full relative path (only if it carries directory components) */
     if(strchr(rel, '/') && like_escape(rel, esc, sizeof esc)){
         snprintf(like, sizeof like, "%%/%s", esc);
@@ -3327,7 +3334,7 @@ static int import_m3u_file(const char *m3u_path){
     if(fstat(fileno(fp), &fst) != 0 || fst.st_size > M3U_MAX_BYTES){ fclose(fp); return 0; }   /* too big (or unknown): skip */
     int from_directive = 0;   /* the name came from #PLAYLIST: (exact) rather than the file name (maybe sanitised) */
     const char *b = strrchr(m3u_path, '/'); b = b ? b+1 : m3u_path;
-    char name[600]; snprintf(name, sizeof name, "%s", b);   /* roomy: a long name is shortened with a hash below, never silently cut */
+    char name[600]; snprintf(name, sizeof name, "%.599s", b);   /* roomy: a long name is shortened with a hash below, never silently cut */
     char *dot = strrchr(name, '.'); if(dot) *dot = 0;
     /* Pre-scan the header for a "#PLAYLIST:" directive. If found, it is the canonical name - use it for both
      * the idempotency check and the created playlist, so re-importing an exported "<name>-<uid>.m3u"
@@ -3379,7 +3386,7 @@ static int import_m3u_file(const char *m3u_path){
     }
     /* canonicalise the FINAL name (directive or filename stem, post-truncation) so the
                    * idempotency lookup matches what mdb_playlist_create stores (which also trims) */
-    char dir[600];
+    char dir[TRACK_PATH_MAX];
     if(snprintf(dir, sizeof dir, "%s", m3u_path) >= (int)sizeof dir){ fclose(fp); return 0; }   /* never resolve against a cut path */
     char *sl = strrchr(dir, '/'); if(sl) *sl = 0; else dir[0] = 0;
     /* Import the whole file ATOMICALLY: the playlist row + every member commit together, or nothing
@@ -3425,7 +3432,7 @@ static int import_m3u_file(const char *m3u_path){
           snprintf(cname, sizeof cname, "%.140s (%d)", nb, k);
       }
     }
-    long pid = 0; int added = 0; int db_err = 0; char line[700];
+    long pid = 0; int added = 0; int db_err = 0; char line[TRACK_PATH_MAX + 2];   /* a full path plus CR/LF: a CRLF line of the longest path is kept */
     int pend_track = 0, has_pend = 0;   /* "#DISKOS-TRACK:n" applies to the next entry line only */
     while(fgets(line, sizeof line, fp)){
         /* A logical line longer than the buffer would otherwise be split by fgets into
@@ -3455,11 +3462,11 @@ static int import_m3u_file(const char *m3u_path){
         }
         if(!*p || *p=='#') continue;                            /* comment / #EXTINF / blank */
         int want_track = has_pend, track_no = pend_track; has_pend = 0;
-        char entry[700]; int en;
+        char entry[TRACK_PATH_MAX]; int en;
         if(*p=='/') en = snprintf(entry, sizeof entry, "%s", p);
         else        en = snprintf(entry, sizeof entry, "%s/%s", dir, p);
         int entry_ok = (en > 0 && en < (int)sizeof entry);   /* joined path fits (don't resolve a truncated one) */
-        char songpath[700];
+        char songpath[TRACK_PATH_MAX];
         int rherr = 0;
         int found = (entry_ok && song_resolve(entry, songpath, sizeof songpath, &rherr));
         if(!found && !rherr) found = song_resolve(p, songpath, sizeof songpath, &rherr);   /* still try the intact relative entry */
@@ -3506,7 +3513,7 @@ static int import_m3u_dir_budget(const char *dir, int *budget){
         const char *n = e->d_name; int L = (int)strlen(n);
         int ism3u = (L>4 && !strcasecmp(n+L-4, ".m3u")) || (L>5 && !strcasecmp(n+L-5, ".m3u8"));
         if(!ism3u) continue;
-        char path[600];
+        char path[TRACK_PATH_MAX];
         if(snprintf(path, sizeof path, "%s/%s", dir, n) >= (int)sizeof path) continue;   /* too long: skip, never truncate */
         if(budget) budget[0]--;
         int added=import_m3u_file(path);
@@ -3541,7 +3548,7 @@ static void import_m3u_walk(const char *dir, int depth, int *budget, int *total)
         budget[2]--;
         const char *nm = e->d_name;
         if(nm[0] == '.' || !strcasecmp(nm, "System Volume Information")) continue;
-        char path[600];
+        char path[TRACK_PATH_MAX];
         if(snprintf(path, sizeof path, "%s/%s", dir, nm) >= (int)sizeof path) continue;   /* too long: skip, never truncate */
         int isdir = e->d_type == DT_DIR;
         if(e->d_type == DT_UNKNOWN){ struct stat st; isdir = lstat(path, &st) == 0 && S_ISDIR(st.st_mode); }   /* lstat: a link is not a dir */
@@ -3724,7 +3731,10 @@ int mdb_upnext(int shuffle, int cur_pos_id, const char *cur_path, mdb_qrow_t *ou
         snprintf(r->title, sizeof r->title, "%s", t ? t : "");
         const char *ar = (const char *)sqlite3_column_text(q, 9);
         snprintf(r->artist, sizeof r->artist, "%s", ar ? ar : "");
-        snprintf(r->path, sizeof r->path, "%s", p ? p : "");
+        if(!path_fits(r->path, sizeof r->path, p)){
+            sqlite3_finalize(q);
+            return MDB_UPNEXT_NOTFOUND;
+        }
         sqlite3_int64 dm = sqlite3_column_int64(q, 11);           /* copied from SONG by the player at queue build */
         r->dur_ms = q_real_dur(d, dm, p, sqlite3_column_int64(q, 12));
     }
@@ -3849,7 +3859,10 @@ int mdb_queue_rows(const int *ids, int n, mdb_qrow_t *out, unsigned char *flags)
         w->base_id = ids[i];
         snprintf(w->title, sizeof w->title, "%s", t ? t : "");
         snprintf(w->artist, sizeof w->artist, "%s", ar ? ar : "");
-        snprintf(w->path, sizeof w->path, "%s", p ? p : "");
+        if(!path_fits(w->path, sizeof w->path, p)){
+            r = MDB_UPNEXT_NOTFOUND;
+            goto out;
+        }
         sqlite3_int64 dm = sqlite3_column_int64(q, 4);
         w->dur_ms = q_real_dur(d, dm, p, sqlite3_column_int64(q, 7));
         if(flags) flags[i] = (unsigned char)((sqlite3_column_int(q, 5) ? 1 : 0) | (sqlite3_column_int(q, 6) ? 2 : 0));
@@ -3883,7 +3896,10 @@ int mdb_song_rows(const int *ids, int n, mdb_srow_t *out, unsigned char *flags){
             snprintf(w->title, sizeof w->title, "%s", t ? t : "");
             snprintf(w->artist, sizeof w->artist, "%s", ar ? ar : "");
             snprintf(w->album, sizeof w->album, "%s", al ? al : "");
-            snprintf(w->path, sizeof w->path, "%s", p ? p : "");
+            if(!path_fits(w->path, sizeof w->path, p)){
+                r = MDB_UPNEXT_NOTFOUND;
+                goto out;
+            }
             sqlite3_int64 dm = sqlite3_column_int64(q, 4);
             w->dur_ms = (dm > 0 && dm <= 2147483647) ? (int)dm : 0;
         }
@@ -3918,7 +3934,10 @@ int mdb_playlist_rows_get(const int *ids, int n, mdb_srow_t *out, unsigned char 
             snprintf(w->title, sizeof w->title, "%s", t ? t : "");
             snprintf(w->artist, sizeof w->artist, "%s", ar ? ar : "");
             snprintf(w->album, sizeof w->album, "%s", al ? al : "");
-            snprintf(w->path, sizeof w->path, "%s", p ? p : "");
+            if(!path_fits(w->path, sizeof w->path, p)){
+                r = MDB_UPNEXT_NOTFOUND;
+                goto out;
+            }
             sqlite3_int64 dm = sqlite3_column_int64(q, 4);
             w->dur_ms = (dm > 0 && dm <= 2147483647) ? (int)dm : 0;
         }
@@ -4062,7 +4081,7 @@ int mdb_sysconfig_set_auto_time(int on){
 /* Keep picture resolution off both the metadata scanner and the drawing thread.
  * Prefer subsequent album rows, then wrap to earlier entries. This is a bounded
  * hint, not playback queue ownership. */
-int mdb_art_nearby(const char *track, int pos, int mode, char paths[][512], int cap){
+int mdb_art_nearby(const char *track, int pos, int mode, char paths[][TRACK_PATH_MAX], int cap){
     if(cap <= 0 || cap > 16) return 0;
     int n = 0;
     if(mode == 0 || mode == 1 || mode == 3){
@@ -4075,7 +4094,7 @@ int mdb_art_nearby(const char *track, int pos, int mode, char paths[][512], int 
             if(mode == 3 && count<4) for(int i=0;i<cur && count<4 && count<cap;i++) ids[count++]=order[i];
             mdb_qrow_t rows[4];
             if(count && mdb_queue_rows(ids, count, rows, NULL) == count)
-                for(int i=0;i<count;i++) if(strcmp(track, rows[i].path)) snprintf(paths[n++], 512, "%s", rows[i].path);
+                for(int i=0;i<count;i++) if(strcmp(track, rows[i].path) && strlen(rows[i].path) < TRACK_PATH_MAX) snprintf(paths[n++], TRACK_PATH_MAX, "%s", rows[i].path);   /* a longer path is skipped, never cut */
             mdb_qsnap_free(&queue);
         }
     }
@@ -4089,7 +4108,7 @@ int mdb_art_nearby(const char *track, int pos, int mode, char paths[][512], int 
         sqlite3_bind_int(q, 4, cap - n);
         while(n < cap && sqlite3_step(q) == SQLITE_ROW){
             const char *p = (const char *)sqlite3_column_text(q, 0);
-            if(p && strlen(p) < 512) snprintf(paths[n++], 512, "%s", p);
+            if(p && strlen(p) < TRACK_PATH_MAX) snprintf(paths[n++], TRACK_PATH_MAX, "%s", p);
         }
         sqlite3_finalize(q);
     }

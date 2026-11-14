@@ -212,12 +212,12 @@ static void tile_short_cb(lv_event_t *e){
         case QT_OUTDOOR: {                                          /* redraws the UI in the new palette */
             int was = cfg_get_int("outdoor", 0) == 1;
             cfg_set_int("outdoor", !was);
-            if(ui_theme_reload("quick") != 0) cfg_set_int("outdoor", was);   /* refused (scan): nothing changes */
+            if(ui_theme_reload_setting("quick","outdoor",was) != 0) cfg_set_int("outdoor", was);   /* refused (scan): nothing changes */
         } break;
         case QT_THEME: {                                            /* next colour preset */
             int was = theme_preset();
             cfg_set_int("theme_preset", (was + 1) % THEME_PRESET_COUNT);
-            if(ui_theme_reload("quick") != 0) cfg_set_int("theme_preset", was);
+            if(ui_theme_reload_setting("quick","theme_preset",was) != 0) cfg_set_int("theme_preset", was);
         } break;
     }
 }

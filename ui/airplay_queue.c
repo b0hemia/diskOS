@@ -28,8 +28,8 @@ struct aps_queue {
 };
 int aps_media_open(const char *root, const char *path){
     size_t n = root ? strlen(root) : 0;
-    if(!n || !path || strncmp(root, path, n) || path[n] != '/' || strlen(path + n + 1) >= 256) return -1;
-    char relative[256]; strcpy(relative, path + n + 1);
+    if(!n || !path || strncmp(root, path, n) || path[n] != '/' || strlen(path + n + 1) >= TRACK_PATH_MAX) return -1;
+    char relative[TRACK_PATH_MAX]; strcpy(relative, path + n + 1);
     /* The configured mount root is trusted. Every library-relative component
      * and the final inode are checked through directory descriptors. */
     int d = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC); if(d < 0) return -1;

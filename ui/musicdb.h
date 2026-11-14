@@ -2,6 +2,7 @@
 /* Copyright (C) 2026 diskOS contributors */
 #ifndef MUSICDB_H
 #define MUSICDB_H
+#include "track_path.h"
 
 #define MDB_MAX_SONGS   1500
 #define MDB_MAX_GROUPS  600
@@ -112,7 +113,7 @@ typedef struct {
     int  dur_ms;
     char title[MDB_STR];     /* TITLE, else the file NAME */
     char artist[MDB_STR];
-    char path[256];
+    char path[TRACK_PATH_MAX];
 } mdb_qrow_t;
 #define MDB_UPNEXT_EMPTY    0      /* the queue is empty */
 #define MDB_UPNEXT_ERROR    (-1)   /* the queue can't be read (DB error) */
@@ -149,7 +150,7 @@ typedef struct {
     char title[MDB_STR];     /* TITLE, else NAME, else the file name */
     char artist[MDB_STR];
     char album[MDB_STR];
-    char path[256];
+    char path[TRACK_PATH_MAX];
 } mdb_srow_t;
 int  mdb_list_song_ids(int list_type, const char *name, int *ids, int cap);
 int  mdb_song_rows(const int *ids, int n, mdb_srow_t *out, unsigned char *flags);
@@ -178,7 +179,7 @@ typedef struct {
     int  id;                    /* SONG.ID of the book file */
     char title[MDB_STR];
     char author[MDB_STR];
-    char path[512];             /* the .m4b file (also the book key) */
+    char path[TRACK_PATH_MAX];  /* the .m4b file (also the book key) */
     long position_ms;           /* saved resume position (0 if none) */
     int  completed;
 } book_t;
@@ -286,5 +287,5 @@ int  mdb_sysconfig_language(void);          /* SYSCONFIG.LANGUAGE (0..), -1 unre
 int  mdb_sysconfig_auto_time(void);          /* SYSCONFIG.AUTO_TIME: 0/1, -1 unreadable (player reads it at start) */
 int  mdb_sysconfig_set_auto_time(int on);    /* 0 = written + read back, -1 = not */
 /* Worker-only bounded active-album artwork paths, through an independent reader. */
-int mdb_art_nearby(const char *track, int pos, int mode, char paths[][512], int cap);
+int mdb_art_nearby(const char *track, int pos, int mode, char paths[][TRACK_PATH_MAX], int cap);
 #endif

@@ -2,6 +2,7 @@
 /* Copyright (C) 2026 diskOS contributors */
 #include "sdio.h"
 #include "art.h"
+#include "track_path.h"
 #include "receiver.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -397,6 +398,15 @@ static const char *ART_COVER_NAMES[] = {
     "Cover.jpg","Folder.jpg","AlbumArt.jpg","albumart.jpg",
 };
 static const unsigned ART_COVER_N = sizeof ART_COVER_NAMES / sizeof ART_COVER_NAMES[0];
+/* Every sidecar path is built as "<dir>/<name>" in a buffer of this many bytes. A directory that cannot hold the
+ * longest sidecar name plus the separator and the NUL has no probe-able cover: refuse it (never cut it, a cut
+ * directory is a different folder). The bound comes from the table and the buffer, not from a constant. */
+#define ART_COVER_PATH_MAX TRACK_PATH_MAX
+static int art_cover_dir_fits(size_t dlen){
+    size_t longest = 0;
+    for(unsigned i = 0; i < ART_COVER_N; i++){ size_t l = strlen(ART_COVER_NAMES[i]); if(l > longest) longest = l; }
+    return dlen > 0 && dlen + 1 + longest + 1 <= ART_COVER_PATH_MAX;
+}
 /* Mix the identity of the track's sidecar cover files (name, size, mtime of each one present, in lookup order)
  * into *h, so replacing, adding or removing a cover.jpg/png invalidates the cache entry. No inode: it is not
  * stable on exfat/vfat (see artcache.c fingerprint). */
@@ -404,9 +414,9 @@ void art_sidecar_signature(const char *track, uint64_t *h){
     const char *slash = strrchr(track, '/');
     if(!slash) return;
     size_t dlen = (size_t)(slash - track);
-    if(dlen == 0 || dlen > 900) return;
+    if(!art_cover_dir_fits(dlen)) return;
     for(unsigned i = 0; i < ART_COVER_N; i++){
-        char cov[1024]; struct stat st;
+        char cov[ART_COVER_PATH_MAX]; struct stat st;
         int n = snprintf(cov, sizeof cov, "%.*s/%s", (int)dlen, track, ART_COVER_NAMES[i]);
         if(n <= 0 || n >= (int)sizeof cov || stat(cov, &st) != 0 || !S_ISREG(st.st_mode)) continue;
         uint64_t v[3] = { i + 1u, (uint64_t)st.st_size, (uint64_t)st.st_mtime };
@@ -418,10 +428,10 @@ int art_source_signature(const char *track, uint64_t *h){
     const char *slash = strrchr(track, '/');
     size_t dlen = slash ? (size_t)(slash-track) : 0;
     for(unsigned i=0;i<=ART_COVER_N;i++){
-        char path[1024]; struct stat st;
+        char path[ART_COVER_PATH_MAX]; struct stat st;
         if(!i) snprintf(path, sizeof path, "%s", track);
         else {
-            if(!dlen || dlen > 900) continue;
+            if(!art_cover_dir_fits(dlen)) continue;
             snprintf(path, sizeof path, "%.*s/%s", (int)dlen, track, ART_COVER_NAMES[i-1]);
         }
         if(stat(path, &st)){ if(i && errno == ENOENT) continue; return -1; }
@@ -467,12 +477,12 @@ static int art_make_all_ex_gen_leased(const char *track, const char *cover_bmp,
     const char *slash = strrchr(track, '/');       /* else try a sibling cover file */
     if(!slash){ t_kill_armed = 0; return -1; }
     size_t dlen = (size_t)(slash - track);
-    if(dlen == 0 || dlen > 900){ t_kill_armed = 0; return -1; }
+    if(!art_cover_dir_fits(dlen)){ t_kill_armed = 0; return -1; }
     for(unsigned i=0; i<sizeof ART_COVER_NAMES/sizeof ART_COVER_NAMES[0]; i++){
         if(art_now_ms() >= deadline){ absent = 0; break; }
         unsigned kg; pthread_mutex_lock(&g_pid_mu); kg = g_kill_gen; pthread_mutex_unlock(&g_pid_mu);
         if(kg != t_kill0){ absent = 0; break; }                   /* SD revoked since this request began - stop probing */
-        char cov[1024];
+        char cov[ART_COVER_PATH_MAX];
         int n = snprintf(cov, sizeof cov, "%.*s/%s", (int)dlen, track, ART_COVER_NAMES[i]);
         if(n <= 0 || n >= (int)sizeof cov) continue;
         if(access(cov, R_OK) != 0){ if(errno != ENOENT) absent = 0; continue; }
@@ -504,11 +514,12 @@ int art_make_saver(const char *track, const char *out_raw, int64_t deadline_ms){
     if(r == -1){
         const char *slash = strrchr(track, '/');
         size_t dlen = slash ? (size_t)(slash - track) : 0;
-        for(unsigned i = 0; dlen > 0 && dlen <= 900 && i < ART_COVER_N; i++){
+        int dir_ok = art_cover_dir_fits(dlen);
+        for(unsigned i = 0; dir_ok && i < ART_COVER_N; i++){
             if(art_now_ms() >= deadline) break;
             unsigned kg; pthread_mutex_lock(&g_pid_mu); kg = g_kill_gen; pthread_mutex_unlock(&g_pid_mu);
             if(kg != t_kill0) break;
-            char cov[1024];
+            char cov[ART_COVER_PATH_MAX];
             int n = snprintf(cov, sizeof cov, "%.*s/%s", (int)dlen, track, ART_COVER_NAMES[i]);
             if(n <= 0 || n >= (int)sizeof cov || access(cov, R_OK) != 0) continue;
             r = art_run_helper(cov, out_raw, NULL, NULL, NULL, 0, 0, deadline);

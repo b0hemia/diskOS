@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+#include "ui_wake.h"
 /* Copyright (C) 2026 diskOS contributors */
 #include "indic.h"
 #include "ui.h"
@@ -82,10 +83,10 @@ static int g_np_fav, g_np_have, g_fav_px, g_fav_py;
  * confirms via a2. Position (a1) frames trigger a full NP refresh from the OLD is_favorite,
  * which would flip the heart back. We hold the tapped value for this exact track until the
  * player confirms it, the track changes, or a timeout - so the heart doesn't visibly bounce. */
-static char g_np_curpath[520];
+static char g_np_curpath[TRACK_PATH_MAX];
 static int  g_favp_active = 0, g_favp_val = 0;
 static uint32_t g_favp_set = 0;
-static char g_favp_path[520];
+static char g_favp_path[TRACK_PATH_MAX];
 static lv_obj_t *btn_mode;
 static lv_obj_t *mode_icon;
 static lv_obj_t *mode_one;
@@ -96,16 +97,16 @@ static lv_obj_t *t_elapsed;
 static lv_obj_t *t_remain;
 
 static lv_color_t accent;
-static char last_path[256];
-static char g_stat_path[256];   /* last track counted in play history (count once per new track) */
+static char last_path[TRACK_PATH_MAX];
+static char g_stat_path[TRACK_PATH_MAX];   /* last track counted in play history (count once per new track) */
 static int g_cast_played;       /* 15c: main.c's receiver confirmation (PLAYING on the facade track's own media); the play-history gate while casting */
 void ui_set_cast_played(int on){ g_cast_played = on != 0; }
 /* Art cache key = album title + the track's PARENT DIRECTORY (not artist). This reuses art
  * within a real album AND within a compilation/various-artists album (same folder), but does
  * NOT reuse across two genuinely-different albums that merely share a title in different
  * folders. For a flat library it degrades to album-only - no worse than before. */
-static char last_art_key[420];  /* key of the art currently shown */
-static char want_art_key[420];  /* key the CURRENT track wants; a finished decode applies only if it matches */
+static char last_art_key[TRACK_PATH_MAX + 96];  /* key of the art currently shown */
+static char want_art_key[TRACK_PATH_MAX + 96];  /* key the CURRENT track wants; a finished decode applies only if it matches */
 static char last_seed_a[IPC_TITLE_CAPACITY];
 static char last_seed_b[160];
 static char cover_src[48];
@@ -488,7 +489,7 @@ int ui_np_seek_move(int x, int y){
     return 1;
 }
 /* Returning from Beam: show the saved time while the reloaded track still reports its start. */
-static char     g_ret_path[256];
+static char     g_ret_path[TRACK_PATH_MAX];
 static long     g_ret_ms = -1;
 static uint32_t g_ret_until = 0;
 void ui_np_hold_return(const char *path, long ms){
@@ -498,6 +499,12 @@ void ui_np_hold_return(const char *path, long ms){
 void ui_np_seek_refused(void){
     g_seek_target_ms = -1; g_seek_hold_until = 0;
     ui_toast("Couldn't seek - try again");
+}
+/* a dialog took the touch: drop the armed or running seek without committing it. The ring and times keep showing the
+ * dragged spot until the next progress tick repaints the played position (the same as the wander-off path in
+ * ui_np_seek_move); there is no cheap exact source for the played value here, so the shown value is left alone. */
+void ui_np_seek_cancel(void){
+    g_seek_cand = 0; g_seek_on = 0; g_scrubbing = 0;
 }
 /* release: commit the seek if one was active. returns 1 if it consumed the gesture */
 int ui_np_seek_release(int x, int y){
@@ -640,7 +647,7 @@ static void transport_cb(lv_event_t *e)
  * main-loop swipe gesture (-> SCR_NPHUB). */
 static int g_cover_px, g_cover_py;
 /* ---- full-screen album art (image choice: fsart_reload_img, below the art state) ---- */
-static char fsart_path[256];
+static char fsart_path[TRACK_PATH_MAX];
 static pb_source fsart_source;
 static void fsart_reload_img(void);
 static int fsart_local(void);
@@ -1685,11 +1692,11 @@ static void clear_art_state(void)
  * (displayed_idx ^ 1), so an in-flight decode can never overwrite the /tmp BMP the
  * shown art (Home pill / Saver backdrop) may still be rendering from. */
 typedef struct {
-    char track[256];
-    char protected_previous[256];
+    char track[TRACK_PATH_MAX];
+    char protected_previous[TRACK_PATH_MAX];
     int  idx;
     char out[40], tout[40], bout[40];
-    char art_key[420];       /* request source key; pixel equality is separate */
+    char art_key[TRACK_PATH_MAX + 96];       /* request source key; pixel equality is separate */
     art_resolution resolution;
     art_picture_id known;
     int reuse;
@@ -1722,10 +1729,10 @@ int ui_decode_speculative(unsigned *gen){
  * no mdb in-memory cache is ever touched off the UI thread. Bounded ring: enqueue fails (0) when full,
  * and the enumerator then pauses rather than dropping albums. */
 #define PWQ_MAX 48   /* the worker drains at ~2/s; the seed self-throttles on a full queue (resumes the same album), so a small ring is plenty */
-static char demandq[24][512];
+static char demandq[24][TRACK_PATH_MAX];
 static int demand_head, demand_tail;
 static int pwq_background_paused;
-static char            pwq[PWQ_MAX][512];
+static char            pwq[PWQ_MAX][TRACK_PATH_MAX];
 static unsigned char   pwq_prove[PWQ_MAX];
 static int             pwq_head, pwq_tail;
 static pthread_mutex_t pwq_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -1753,6 +1760,7 @@ void ui_set_prewarm_mode(int m){                 /* 0=covers only 1=idle 2=idle&
 }
 static int pwq_enqueue(const char *path, int prove){
     if(!path || !path[0]) return 1;
+    if(strlen(path) >= sizeof pwq[0]) return 1;   /* too long for the ring: skipped as handled, never cut to a prefix */
     int ok = 0;
     pthread_once(&pwq_once, pwq_init);
     pthread_mutex_lock(&pwq_mu);
@@ -1789,7 +1797,7 @@ int ui_prewarm_enqueue(const char *path){
 }
 /* The newest playback neighbourhood replaces obsolete speculative neighbours.
  * Its bounded 16 paths fit independently of an arbitrarily full seed backlog. */
-static void pwq_replace_nearby(char paths[][512],int n){
+static void pwq_replace_nearby(char paths[][TRACK_PATH_MAX],int n){
     if(n<0) n=0;
     if(n>23) n=23;
     pthread_mutex_lock(&pwq_mu);
@@ -1830,7 +1838,7 @@ static void pw_sleep(int secs){                    /* idle sleep, but wake early
 }
 
 static pthread_mutex_t g_art_mu = PTHREAD_MUTEX_INITIALIZER;
-static char g_art_displayed_track[256];
+static char g_art_displayed_track[TRACK_PATH_MAX];
 static art_resolution g_art_displayed;
 static uint64_t g_art_library;
 static uint64_t g_art_media;
@@ -1948,12 +1956,16 @@ static void *art_worker(void *arg)
             g_art_rc = rc; g_art_result = job; g_art_done_req = my_req;
             g_art_ready = 1; g_art_inflight = 0;
             pthread_mutex_unlock(&g_art_mu);
+            ui_notify(UI_WAKE_ART);
             if((rc == 0 || job.resolution.state == ART_ABSENT) && !job.receiver.session && !job.from_net && job.track[0]){
-                char nearby[16][512]; int n = mdb_art_nearby(job.track, job.pos, job.mode, nearby, 16);
+                /* 16 paths of up to TRACK_PATH_MAX bytes: heap, not this worker's stack (default-size thread stack) */
+                char (*nearby)[TRACK_PATH_MAX] = malloc(16 * sizeof *nearby);
+                int n = nearby ? mdb_art_nearby(job.track, job.pos, job.mode, nearby, 16) : 0;
                 const char *pins[16]; for(int i=0;i<n;i++) pins[i]=nearby[i];
                 pthread_mutex_lock(&g_art_mu);
                 if(my_req==g_art_req){ artcache_protect(1,pins,n); pwq_replace_nearby(nearby,n); }
                 pthread_mutex_unlock(&g_art_mu);
+                free(nearby);
             }
             return NULL;
         }
@@ -1981,7 +1993,7 @@ static void art_request_clear(void)
  * prewarming's thermal/idle gates or start a decoder on an unchanged source. */
 static pthread_mutex_t art_wake_mu = PTHREAD_MUTEX_INITIALIZER;
 static int art_wake_pending, art_wake_running;
-static char art_wake_track[256];
+static char art_wake_track[TRACK_PATH_MAX];
 static art_resolution art_wake_displayed;
 static void art_wake_check(const char *track, const art_resolution *displayed){
     sd_io_check_media();
@@ -1992,7 +2004,7 @@ static void art_wake_check(const char *track, const art_resolution *displayed){
 static void *art_wake_worker(void *unused){
     (void)unused;
     for(;;){
-        char track[256]; art_resolution displayed;
+        char track[TRACK_PATH_MAX]; art_resolution displayed;
         pthread_mutex_lock(&art_wake_mu);
         if(!art_wake_pending){
             art_wake_running = 0;
@@ -2339,7 +2351,7 @@ static void update_cover_for_path(const track_state_t *st)
          * Restore it before constructing the key or feeding sharp artwork. */
         resolved = g_art_displayed;
     }
-    char art_key[420]; make_art_key(st, art_key, sizeof art_key);
+    char art_key[TRACK_PATH_MAX + 96]; make_art_key(st, art_key, sizeof art_key);
     /* Supersede success AND failure before the verified reuse branch. */
     if(path_changed){
         pthread_mutex_lock(&g_art_mu);
@@ -2512,7 +2524,7 @@ void ui_art_poll(lv_timer_t *t)
     if(g_art_title_pending){
         track_state_t raw, st; ipc_get_state(&raw); playback_display_state(&st, &raw); update_cover_for_path(&st);   /* 15c: the view (a copy of raw while LOCAL) */
     }
-    { char got[512];                        /* Online Album Art saved a picture: redo that song's cover if it's on */
+    { char got[TRACK_PATH_MAX];                        /* Online Album Art saved a picture: redo that song's cover if it's on */
       if(netart_take_ready(got, sizeof got) && cfg_get_int("online_art", 0) && strcmp(got, last_path) == 0) ui_art_retry(); }
     int ready = 0, rc = -1; art_req_t res; unsigned done_req = 0, cur_req = 0;
     pthread_mutex_lock(&g_art_mu);
@@ -2658,7 +2670,7 @@ static void *art_prewarm_worker(void *arg)
          * in-memory cache is touched off the UI thread. Runs regardless of the idle gate (users want
          * covers while browsing) but stays temp-throttled and serialized with the live NP decoder. */
         pthread_mutex_lock(&pwq_mu); pwq_background_paused = !pw_window_open(); pthread_mutex_unlock(&pwq_mu);
-        char qpath[512]; int prove=0;
+        char qpath[TRACK_PATH_MAX]; int prove=0;
         if(pwq_pop(qpath, sizeof qpath, &prove)){
             pw_wait_window(&hot);                        /* heat gate + yields to the live decode */
             char fp0[24];
@@ -2697,7 +2709,7 @@ static void *art_prewarm_worker(void *arg)
         /* Finish bounded migration batches before our own accent writes change
          * song.db's stamp. Demand interrupts between every one-set transaction. */
         if(artcache_maintenance()){ usleep(120000); continue; }
-        char path[300];
+        char path[TRACK_PATH_MAX];
         if(!mdb_prewarm_next(id, &id, path, sizeof path)){   /* swept the whole library */
             id=0; pw_sleep(did_work?60:1800); did_work=0; continue;   /* rest longer if nothing pending (wake for queued covers) */
         }
@@ -3637,8 +3649,9 @@ void ui_update(const track_state_t *st)
         last_path[0] = '\0';
         update_accent_seed(st);   /* no-track -> neutral light grey (resets seed + applies once via the gate) */
 
-        set_label_text_changed(title, "No Track");
-        set_label_text_changed(artist, "");
+        /* the player reports a track whose path this build cannot carry: say so, never keep the previous song */
+        set_label_text_changed(title, st && st->path_unavailable ? "Track unavailable" : "No Track");
+        set_label_text_changed(artist, st && st->path_unavailable ? "Path too long" : "");
         set_label_text_changed(album, "");
         if(album_pos) set_label_text_changed(album_pos, "");
         album_beam_style(0, 0);
@@ -3923,4 +3936,27 @@ void ui_show_volume(int vol)
 
 void ui_refresh_remote_volume(void){
     if(g_vol_panel && lv_obj_is_valid(g_vol_panel) && !lv_obj_has_flag(g_vol_panel, LV_OBJ_FLAG_HIDDEN) && playback_source() != PB_SRC_LOCAL) ui_show_volume(0);
+}
+
+/* Lifecycle gating only. Active receiver transitions continue in darkness. */
+void ui_receiver_poll_sync(void){
+    if(!g_rx_timer)return;
+    receiver_snapshot r;rx_snapshot(&r);
+    int active=r.target==RECEIVER_SOURCE_AIRPLAY || r.source==RECEIVER_SOURCE_AIRPLAY ||
+        g_rx_return || g_rx_visible || rx_pending();
+    if(active){
+        /* Preserve the former dark 200-ms observation cadence once settled;
+         * transitions keep their 100-ms deadline even with the panel off. */
+        lv_timer_set_period(g_rx_timer,ui_screen_backlight_on() || rx_pending() || g_rx_return ? 100 : 200);
+        lv_timer_resume(g_rx_timer);
+    }else lv_timer_pause(g_rx_timer);
+}
+
+/* The volume overlay sits on the top layer and is clickable, but it is a status readout, not a dialog: it must not take a
+ * gesture that starts outside it. ui_volume_panel_is names it for screen_dialog_open; ui_volume_hit = it is up under (x,y). */
+int ui_volume_panel_is(const lv_obj_t *o){ return o && o == g_vol_panel; }
+int ui_volume_hit(int x, int y){
+    lv_point_t p = { .x = x, .y = y };
+    return g_vol_panel && lv_obj_is_valid(g_vol_panel) && !lv_obj_has_flag(g_vol_panel, LV_OBJ_FLAG_HIDDEN) &&
+           lv_obj_hit_test(g_vol_panel, &p);
 }

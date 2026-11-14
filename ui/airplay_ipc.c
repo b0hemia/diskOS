@@ -47,7 +47,7 @@ int aps_ipc_receive_reason(int sock, uint32_t attempt, aps_message *b, int *fd, 
     if(!valid || b->attempt != attempt){ if(*fd >= 0) close(*fd); *fd = -1; return valid ? 0 : -1; }
     b->pin[8] = 0; b->target.id[127] = 0; b->target.name[63] = 0; b->target.addr[15] = 0;
     b->view.title[PB_TEXT_MAX - 1] = 0; b->view.artist[159] = 0; b->view.album[159] = 0;
-    b->view.path[PB_TEXT_MAX - 1] = 0; b->view.dest[47] = 0;
+    b->view.path[sizeof b->view.path - 1] = 0; b->view.dest[47] = 0;
     return 1;
 }
 int aps_ipc_receive(int sock, uint32_t attempt, aps_message *b, int *fd){

@@ -16,6 +16,7 @@ int  screen_home(void);
 /* A swipe up that STARTS at or below this row (the bottom 40 px of the 360 px glass) is the Home swipe. Now Playing's
  * seek never arms from here (ui_np_seek_press). */
 #define HOME_SWIPE_Y 320
+int  screen_dialog_open(void);                   /* screen_modal_open() minus the volume overlay: a real dialog, menu or panel owns touch */
 int  screen_modal_open(void);                    /* a dialog, menu or other touch-taking panel is on the top layer */
 int  screen_on_drag_control(int x, int y);       /* the point is on a slider, arc, roller or sideways scroller */
 int  screen_anim_on(void);   /* the Animations setting as the screen manager applies it */
@@ -148,6 +149,8 @@ void wifi_info_open(void);
 void bt_create(lv_obj_t *root);
 void bt_open(void);
 int  bt_toggle(void);          /* Quick Settings tile short-press: flip BT + persist, returns new state */
+int bt_radio_cached(void);     /* UI-published radio observation */
+int bt_radio_probe(void);      /* native rfkill; UI-published intent fallback, worker-safe */
 int  bt_radio_on(void);        /* cheap actual BT-enabled state (rfkill), for the status icon + QS tile */
 void bt_power_set(int on);    /* the one power path: the page switch and the Settings row */
 int  bt_power_pending(void);   /* a start from bt_power_set is still waiting for the adapter */
@@ -293,6 +296,7 @@ void ui_glyph_center_ink(lv_obj_t *label);                /* a one-icon label ce
 int  ui_pp_icon_playing(int real_playing);   /* returns the play/pause glyph state: prediction if held, else real */
 const char *ui_eq_name(int i);   /* EQ preset name for index 0..20 (drawer toast) */
 void ui_rescan_library(void);
+int ui_theme_reload_setting(const char *screen,const char *key,int previous);
 int  ui_theme_reload(const char *screen);   /* re-launch the UI to apply a theme change (main.c) */
 int  ui_play_mode_now(void);           /* the play mode the player is using (0..4), -1 unknown (main.c) */
 int  ui_queue_jump(int ord1);          /* Up Next: type-0 jump to 1-based position in the current queue (0 = sent) */
@@ -330,6 +334,7 @@ void ui_np_pp_filled(int on);            /* theme: the play key is filled with t
 void ui_np_backdrop_enabled(int on);     /* theme: 0 = no blurred cover behind Now Playing */
 int  ui_np_seek_move(int x, int y);
 int  ui_np_seek_release(int x, int y);
+void ui_np_seek_cancel(void);
 /* full-screen album-art view (stock cover.png reuse): tap the NP cover to open */
 void ui_np_fsart_open(void);
 void ui_np_fsart_close(void);
@@ -340,6 +345,8 @@ void saver_vinyl_spin(int want);          /* drive saver vinyl spin (from main l
 const char *ui_current_thumb_src(void);
 void ui_set_np_style(int vinyl);   /* 0 = cover (rounded square), 1 = vinyl (disc) */
 void ui_vinyl_spin(int want);      /* drive the vinyl spin from the main loop */
+int  ui_volume_panel_is(const lv_obj_t *o);   /* the volume overlay (a clickable top-layer readout, not a dialog) */
+int  ui_volume_hit(int x, int y);             /* the volume overlay is up and (x,y) lies on it */
 void ui_show_volume(int vol);      /* show the on-screen volume bar (auto-hides) */
 /* home */
 void home_create(lv_obj_t *root);

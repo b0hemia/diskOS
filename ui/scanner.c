@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+#include "ui_wake.h"
 /* Copyright (C) 2026 diskOS contributors */
 #include "sdio.h"
 #include "ipc.h"
@@ -2259,6 +2260,7 @@ static void *scan_thread(void *arg){
         g_active=0; g_finished_seq++;
         pthread_mutex_unlock(&g_mu);
         sd_io_end();
+        ui_notify(UI_WAKE_SCAN);
         return NULL;
     }
     if(sqlite3_open_v2(DB_PATH,&g_db,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_FULLMUTEX,NULL)==SQLITE_OK){
@@ -2432,6 +2434,7 @@ static void *scan_thread(void *arg){
     g_active=0; g_finished_seq++;
     pthread_mutex_unlock(&g_mu);
     sd_io_end();
+    ui_notify(UI_WAKE_SCAN);
         return NULL;
 }
 

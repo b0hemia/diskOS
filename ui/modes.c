@@ -73,7 +73,7 @@ static const out_seq_t OUT_SEQ[3] = {
 static void modes_ui_refresh(void);
 static int g_out_route = OUT_INTERNAL;
 static unsigned g_out_gen = 0;
-static struct { int target, was_playing, full; unsigned gen; char path[256]; long pos; uint32_t t0, quiet0; lv_timer_t *tm; } g_osw;
+static struct { int target, was_playing, full; unsigned gen; char path[TRACK_PATH_MAX]; long pos; uint32_t t0, quiet0; lv_timer_t *tm; } g_osw;
 static int g_rec = 0; static unsigned g_rec_gen = 0; static lv_timer_t *g_rec_tm = NULL;
 
 static void out_set_state(int r){
@@ -121,6 +121,10 @@ static int out_pcm_probe(int require_closed){
 static int out_pcm_quiet(void){ return out_pcm_probe(0); }
 int modes_receiver_quiet(void){ return out_pcm_probe(1); }
 int modes_local_teardown(unsigned generation){ return ipc_send_automatic("0657000C0008", generation); }
+/* Beam interlock (not the receiver path: modes_local_teardown stays the one shared Local reselect). V2.57: with the player
+ * paused 0657000C0002 closes every playback PCM and the stock key 250 then does nothing (device-verified 2026-11-11). */
+int modes_beam_lock(unsigned generation){ return ipc_send_automatic("0657000C0002", generation); }
+int modes_beam_unlock(void){ return ipc_send_automatic("0657000C0008", ipc_generation()); }
 static int out_usb_card_ok(void){
     char p[96]; snprintf(p, sizeof p, "%s/usbid", OUT_USB_CARD);
     return access(p, F_OK) == 0;

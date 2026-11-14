@@ -158,7 +158,7 @@ static void detail_refresh_async(void *u){
 }
 static void theme_reload_or_revert(const char *key){
     const char *destination = !strcmp(key, "outdoor") ? "settings:outdoor" : "settings";
-    if(ui_theme_reload(destination) == 0) return;        /* not reached on success: the exec replaced us */
+    if(ui_theme_reload_setting(destination,key,g_set_prev) == 0) return;        /* not reached on success: the exec replaced us */
     cfg_set_int(key, g_set_prev);
     lv_async_call(detail_refresh_async, NULL);
 }

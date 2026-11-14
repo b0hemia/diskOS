@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "sdio.h"
+#include "ui_wake.h"
 #include <pthread.h>
 #include <assert.h>
 #include <unistd.h>
@@ -130,6 +131,7 @@ uint64_t sd_io_generation(void){
 }
 void sd_io_invalidate(void){
     pthread_mutex_lock(&g_mu); g_generation++; pthread_mutex_unlock(&g_mu);
+    ui_notify(UI_WAKE_FILES);
 }
 uint64_t sd_io_media_generation(void){
     pthread_mutex_lock(&g_mu);
@@ -158,6 +160,9 @@ static void check_media_locked(void){
 void sd_io_check_media(void){
     /* Serialize observation and publication with admission and other probes. */
     pthread_mutex_lock(&g_mu);
+    uint64_t before = g_media_generation;
     check_media_locked();
+    int changed = before != g_media_generation;
     pthread_mutex_unlock(&g_mu);
+    if(changed) ui_notify(UI_WAKE_FILES);
 }

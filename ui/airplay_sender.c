@@ -18,7 +18,7 @@
 #include <unistd.h>
 typedef struct {
     pthread_t thread; _Atomic int done, cancel; int result, mode, pos_id; unsigned rate, bits;
-    const char *root; char path[256]; unsigned generation; uint64_t token;
+    const char *root; char path[TRACK_PATH_MAX]; unsigned generation; uint64_t token;
 } input_check;
 static int input_cancel(void *ctx){ input_check *c = ctx; return atomic_load(&c->cancel); }
 static void *input_run(void *ctx){
@@ -118,15 +118,18 @@ static void publish(void *ctx, const pb_cast_state *v){
 }
 static void say(void *ctx, ho_msg msg){ aps_sender *a = ctx; if(a->cfg.say) a->cfg.say(msg); }
 static int teardown(void *ctx){ aps_sender *a = ctx; return a->cfg.teardown ? a->cfg.teardown(a->handoff->gen) : -1; }
+static int lock_local(void *ctx){ aps_sender *a = ctx; return a->cfg.lock ? a->cfg.lock(a->handoff->gen) : -1; }
+static int unlock_local(void *ctx){ aps_sender *a = ctx; return a->cfg.unlock ? a->cfg.unlock() : -1; }
 static ho_sink sink(aps_sender *a){
-    ho_sink k = { a, pause_local, load, play, stop, sender_revoke, release, publish, say, teardown }; return k;
+    ho_sink k = { a, pause_local, load, play, stop, sender_revoke, release, publish, say, teardown,
+                  a->cfg.lock ? lock_local : NULL, a->cfg.unlock ? unlock_local : NULL }; return k;
 }
 static void event(aps_sender *a, ho_evtype type, const ho_local *l){
     ho_sink k = sink(a); ho_event e = { type, ho_attempt(a->handoff), l, a->target.name, 1 };
     ho_step(a->handoff, a->now, &e, &k);
 }
 static int input_start(aps_sender *a, const ho_local *l){
-    if(a->preflight || !l || !l->sd_ok || !l->have_track || !l->path || strlen(l->path) >= 256) return -1;
+    if(a->preflight || !l || !l->sd_ok || !l->have_track || !l->path || strlen(l->path) >= TRACK_PATH_MAX) return -1;
     input_check *c = calloc(1, sizeof *c); if(!c) return -1;
     atomic_init(&c->done, 0); atomic_init(&c->cancel, 0);
     c->root = a->cfg.sd_root; c->mode = a->mode; c->pos_id = a->pos_id;
@@ -300,6 +303,9 @@ void aps_sender_tick(aps_sender *a, const ho_local *l, uint32_t now){
     if(a->ctl >= 0) receive(a, l);
     decoder_tick(a);
     input_tick(a, l);
+    if(a->cfg.lock && a->phase == APSS_ENDING &&
+       ho_get(a->handoff) != HO_LOCAL)
+        event(a, HO_EV_STOP, l);
     if(a->phase == APSS_RUNNING){ event(a, HO_EV_LOCAL, l); if(ho_get(a->handoff) == HO_LOCAL) terminate(a, "handoff returned local"); }
     int status; pid_t p = a->pid > 0 && !a->worker_reaped ? waitpid(a->pid, &status, WNOHANG) : 0;
     if(p == a->pid && p > 0){

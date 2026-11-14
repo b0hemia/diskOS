@@ -33,7 +33,7 @@ static lv_timer_t *g_un_fill, *g_un_watch;
 static mdb_qrow_t  g_un_rows[UN_SHOW + 1];
 static int         g_un_n, g_un_fill_i, g_un_more, g_un_retries, g_un_retry;   /* g_un_retry: last read was transient */
 static int         g_un_mode = -1;     /* the play mode the list was read in */
-static char        g_un_path[256];     /* the song that was current when the list was read */
+static char        g_un_path[TRACK_PATH_MAX];     /* the song that was current when the list was read */
 static int         g_un_pos;           /* its pos_id then (0 = unknown) */
 static unsigned    g_un_seq;           /* its path_seq then: a track change since means the list is stale */
 /* Cast (slice 14f): while playback_source() is CAST the list is the Cast queue in PLAY order, read from the worker's published view (a copy;
@@ -330,3 +330,10 @@ void upnext_refresh(void){
 }
 
 void upnext_open(void){ screen_show(SCR_UPNEXT); }
+
+/* Cosmetic row construction waits in darkness; queue/scan ownership is unchanged. */
+void upnext_fill_sync(int lit){
+    if(!g_un_fill)return;
+    if(!lit || screen_current()!=SCR_UPNEXT)lv_timer_pause(g_un_fill);
+    else if(lv_timer_get_paused(g_un_fill)){lv_timer_ready(g_un_fill);lv_timer_resume(g_un_fill);}
+}
