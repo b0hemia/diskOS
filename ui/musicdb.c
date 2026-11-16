@@ -2316,7 +2316,11 @@ int mdb_playlist_sync_registry(void){
     sqlite3_exec(d, "CREATE TABLE IF NOT EXISTS PLAYLIST_INFO (ID INTEGER PRIMARY KEY AUTOINCREMENT, NAME TEXT, ADD_TIME INT8);", 0, 0, 0);
     int owns_txn = sqlite3_get_autocommit(d);
     if(sqlite3_exec(d, "SAVEPOINT plsync;", 0, 0, 0) != SQLITE_OK) return 0;
-    int ok = 1;
+    int ok = 1, schema_ok;
+    /* Agreeing registries change nothing, but the write statements below still make committing need the EXCLUSIVE
+     * lock, which any concurrent reader (a worker, the player) refuses at once on this zero-timeout connection. */
+    int changes0 = sqlite3_total_changes(d);
+    sqlite3_int64 schema0 = mdb_scalar_i64(d, "PRAGMA schema_version;", &schema_ok);
     /* -1. follow a deletion made on the stock side. DISKOS_PL_SYNCED remembers which playlists have been in BOTH
      *     registries and how many songs each had then. Stock's own delete removes a playlist's index row AND its
      *     songs; a rebuilt or partly filled index loses rows but never songs. So a remembered playlist that HAD songs
@@ -2381,6 +2385,11 @@ int mdb_playlist_sync_registry(void){
                              "WHERE p.ID>0 AND EXISTS (SELECT 1 FROM CUSTOM_PLAYLIST_INDEX i WHERE i.LIST_ID=p.ID) "
                              "GROUP BY p.ID) c WHERE NOT EXISTS (SELECT 1 FROM DISKOS_PL_SYNCED y "
                              "WHERE y.PID=c.ID AND y.MEMBERS=c.MEMBERS);", 0, 0, 0) != SQLITE_OK) ok = 0;
+    if(ok && owns_txn && schema_ok && sqlite3_total_changes(d) == changes0){
+        int same; sqlite3_int64 schema1 = mdb_scalar_i64(d, "PRAGMA schema_version;", &same);
+        /* Nothing to publish: end the transaction without a commit, so no EXCLUSIVE lock is requested. */
+        if(same && schema1 == schema0 && sqlite3_exec(d, "ROLLBACK;", 0, 0, 0) == SQLITE_OK) return 2;
+    }
     if(ok && sqlite3_exec(d, "RELEASE plsync;", 0, 0, 0) == SQLITE_OK) return 2;
     sqlite3_exec(d, "ROLLBACK TO plsync;", 0, 0, 0);
     sqlite3_exec(d, "RELEASE plsync;", 0, 0, 0);
