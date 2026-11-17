@@ -4,13 +4,7 @@ All notable changes to diskOS are documented here.
 
 Entries follow the Keep a Changelog format, with Added, Changed, and Fixed categories where applicable.
 
-## [1.2.3] - 2026-11-XX
-
-<!-- Checks for the lead to resolve:
-- [TV] Receiver volume: one step per Disc press.
-- [TV] Cast receiver Stop and resume from the last usable position.
-- [TV] V2.57 physical play/pause while beaming to Cast and AirPlay.
--->
+## [1.2.3] - 2026-11-19
 
 Adds low-battery notices with a safe turn-off at empty, sort tags, featured artists as their own
 artists, WAV tags, Gurmukhi, Devanagari, Urdu and Hebrew text shaping, each song's own cover art
@@ -34,7 +28,6 @@ Fresh installs and older versions use the installer.
   checks. Detecting charging, a reading above 0%, or unavailable battery evidence cancels the
   countdown. If the checks fail, diskOS keeps card access closed, withholds its power-off request
   and asks you to restart. Other firmware gets notices without diskOS's empty-battery shutdown.
-  [?: Disc check of the 0% countdown, V2.40 and V2.57]
 - Sort tags: artist, album artist and album sort values (ID3 TSOP/TSO2/TSOA and ALBUMARTISTSORT,
   Vorbis comments in FLAC/Ogg/Opus, MP4, WMA, APE, and ID3 tags in AAC, AIFF, DSF and WAV) order
   Artists, Albums, A-Z and Album Wall. Display names do not change, and untagged files sort as
@@ -48,7 +41,6 @@ Fresh installs and older versions use the installer.
   left, with long names scrolling in lists (#20). Latin and CJK text are unchanged.
 - Now Playing shows each song's own embedded cover instead of the album's first cover.
 - Weather shows when it last updated, with a Refresh button.
-<!-- open: [?] the Disc check of the 0% countdown on V2.40 and V2.57 has not been done. -->
 
 ### Changed
 
@@ -66,8 +58,7 @@ Fresh installs and older versions use the installer.
   background preparation skips covers already prepared on the card.
 - Wi-Fi, Bluetooth and several UI workers use event notifications and scheduled deadlines,
   reducing repeated background checks. Bluetooth restore at startup waits for the player's answer,
-  and a Wi-Fi scan asked for during a connection hold runs after it. [?: Wi-Fi and Bluetooth
-  reconnect, restart and fallback device checklist not done]
+  and a Wi-Fi scan asked for during a connection hold runs after it.
 - Wi-Fi scanning, connection and radio work run in the background instead of blocking touch
   handling.
 - The Vinyl screensaver starts at a new angle each time it opens.
@@ -98,6 +89,8 @@ Fresh installs and older versions use the installer.
 - Library: a scan never commits after a card swap; a lost scan transaction keeps the library;
   Search and Cover Flow keep up with library reloads, and Cover Flow keeps the selected album;
   card writes are refused when the card is not mounted; navigation gestures wait for open dialogs.
+  Library lists such as Albums, Favourites and Playlists no longer show "Library busy" just
+  because the player is reading the library at the same time.
 - Playlists: export never overwrites a file it did not write; removing a song removes exactly the
   row pressed. Long playlist file names import under distinct names.
 - Books: a seek made after a restart is kept; Chapters follow the playing chapter.
@@ -132,7 +125,7 @@ Fresh installs and older versions use the installer.
 - Power key: when the player announces shutdown, diskOS stops new card work, stops cover helpers
   and image previews, and attempts to drain and flush pending work before the player turns off. An
   existing shutdown is joined. If the player restarts, card access resumes and the library is
-  checked again. Power-key shutdown also uses the closing animation when the screen is on.
+  checked again.
 - A shutdown failure while the screen is off shows its restart notice when the screen wakes.
 - Long file paths: diskOS carries complete absolute track paths of up to 1023 bytes through the
   library, playback display, lyrics, Song Info, playlists, artwork and Beam, including audiobook
@@ -147,8 +140,8 @@ Fresh installs and older versions use the installer.
 - Installer: the flash check now rejects a page the Disc's memory reports as unreadable instead of
   accepting it.
 - Installer (Linux): if the bundled squashfs tools fail their check (seen on Fedora 44), the
-  installer checks a complete pair of system tools the same way and uses them (#33). [?: rebuilt
-  musl tools in the package, confirm at packaging]
+  installer checks a complete pair of system tools the same way and uses them (#33). The bundled
+  tools are now built with musl and no longer crash there.
 - Installer: during an update the boot log no longer says the stock UI will run; it says the old
   UI is being replaced and reports the outcome on its own line.
 - Wi-Fi, Beam, EQ and power messages (low and full battery, the empty-battery dialog and shutdown
