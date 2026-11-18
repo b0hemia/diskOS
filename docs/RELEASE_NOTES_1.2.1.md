@@ -16,7 +16,7 @@ computer awake until verification finishes. Recovery is not guaranteed.
 
 ### Added
 
-- [Public website](https://b0hemia.github.io/diskos/) with screenshots, a feature tour
+- [Public website](https://b0hemia.github.io/diskOS/) with screenshots, a feature tour
   and installation links.
 - Ogg Opus support for .opus, .oga and .ogg files: the scanner reads their tags and
   available lengths, and playback uses the Disc's stock player. When the player's

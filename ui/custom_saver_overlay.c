@@ -4,6 +4,7 @@
 #ifndef CUSTOM_OV_MODEL_ONLY
 #include "i18n.h"
 #include "theme.h"
+#include "indic.h"
 #include "screens.h"   /* ui_font_cjk */
 #endif
 #include <stdint.h>
@@ -172,6 +173,7 @@ custom_ov_faces_t custom_ov_faces(int font, int size){
         f.clock = theme_font_chain(d, THEME_FONT_SAVER_CLOCK, &g_face[font][0], &g_face_ft[font][0]);
         f.text = theme_font_chain(d, SIZE_ROLE[size], &g_face[font][1 + size], &g_face_ft[font][1 + size]);
     }
+    indic_font_register(f.text,SIZE_PX[size]);
     return f;
 }
 
@@ -415,6 +417,10 @@ static void measure(custom_ov_group_t *g, const custom_ov_data_t *d){
     const lv_font_t *tf = g->faces.text;
     memset(m, 0, sizeof *m);
     m->line_h = tf->line_height;
+    if(d->has_track && (g->model.mask & CUSTOM_OV_TRACK)) {
+        m->line_h = imax(m->line_h,indic_line_height(d->title,tf));
+        m->line_h = imax(m->line_h,indic_line_height(d->artist,tf));
+    }
     m->pause_w = PAUSE_W;
     int digit = 0;
     widest_pair(tf, 0, 9, &digit);
@@ -467,6 +473,7 @@ static lv_obj_t *mk_label(custom_ov_group_t *g, int part, const lv_font_t *f, in
     lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
     lv_obj_set_size(l, w, h);
     lv_obj_set_pos(l, x - g->lay.x, y - g->lay.y);
+    if(part == CUSTOM_OV_PART_TITLE || part == CUSTOM_OV_PART_ARTIST) indic_label_enable(l);
     lv_label_set_text(l, "");
     g->part[part] = l;
     return l;
@@ -564,10 +571,15 @@ static void apply(custom_ov_group_t *g, const custom_ov_data_t *d){
     }
     const char *nt = d->has_track ? d->title : "", *na = d->has_track ? d->artist : "";
     if(l->title.w && (all || strcmp(c->has_track ? c->title : "", nt) || strcmp(c->has_track ? c->artist : "", na))){   /* the SHOWN text, so a loaded flag alone writes nothing */
-        custom_ov_fit_text(g->faces.text, nt, l->title.w, buf, sizeof buf);
-        set_text(g->part[CUSTOM_OV_PART_TITLE], buf);
-        custom_ov_fit_text(g->faces.text, na, l->artist.w, buf, sizeof buf);
-        set_text(g->part[CUSTOM_OV_PART_ARTIST], buf);
+        const char *values[] = {nt,na};
+        const int parts[] = {CUSTOM_OV_PART_TITLE,CUSTOM_OV_PART_ARTIST};
+        const int widths[] = {l->title.w,l->artist.w};
+        for(unsigned i = 0; i < 2; i++) {
+            lv_obj_t *label = g->part[parts[i]];
+            lv_label_set_long_mode(label,indic_text(values[i]) ? LV_LABEL_LONG_DOT : LV_LABEL_LONG_CLIP);
+            if(indic_text(values[i])) set_text(label,values[i]);
+            else { custom_ov_fit_text(g->faces.text,values[i],widths[i],buf,sizeof buf); set_text(label,buf); }
+        }
     }
     if(all || c->has_track != d->has_track || c->paused != d->paused) show(g->part[CUSTOM_OV_PART_PAUSE], d->has_track && d->paused);
     if(l->wx.w && (all || c->wx_band != d->wx_band || c->wx_icon != d->wx_icon || c->wx_temp != d->wx_temp || c->wx_unit != d->wx_unit)){
@@ -618,7 +630,13 @@ custom_ov_group_t *custom_ov_group_create(lv_obj_t *parent, const custom_ov_t *m
 
 void custom_ov_group_update(custom_ov_group_t *g, const custom_ov_data_t *d){
     if(!g || !d) return;
-    if((g->model.mask & CUSTOM_OV_TIME) && g->has_mer != (d->meridiem[0] != 0)) build(g, d);   /* the 12/24-hour form changes the reserved width */
+    int changed = d->has_track != g->cur.has_track || strcmp(d->title,g->cur.title) || strcmp(d->artist,g->cur.artist);
+    int height = changed && g->faces.text ? g->faces.text->line_height : g->m.line_h;
+    if(changed && g->faces.text && d->has_track && (g->model.mask & CUSTOM_OV_TRACK)) {
+        height = imax(height,indic_line_height(d->title,g->faces.text));
+        height = imax(height,indic_line_height(d->artist,g->faces.text));
+    }
+    if(height != g->m.line_h || ((g->model.mask & CUSTOM_OV_TIME) && g->has_mer != (d->meridiem[0] != 0))) build(g, d);   /* the 12/24-hour form changes the reserved width */
     apply(g, d);
 }
 

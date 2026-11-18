@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Encoding and dependency regressions; no device or build actions."""
 import builtins
 import contextlib
@@ -590,7 +590,7 @@ class FirmwareDependencyTests(unittest.TestCase):
         self.assertNotIn('[E105]', text)
         self.assertNotIn('Traceback', text)
 
-    def run_spec(self, work, args=(), version='1.2.2', native=True, git_outputs=None,
+    def run_spec(self, work, args=(), version='1.2.3', native=True, git_outputs=None,
                  host=('Windows', 'AMD64'), missing=(), libfiles=(),
                  licence_text='upstream licence fixture\n', spec_source=None,
                  dll_bytes=b'pinned DLL fixture', dll_missing=False, analysis_binaries=None,
@@ -1062,8 +1062,8 @@ class FirmwareDependencyTests(unittest.TestCase):
 
     def test_spec_refuses_invalid_enable_requests(self):
         with tempfile.TemporaryDirectory() as work:
-            for commit, version, native in (('', '1.2.2', True), ('short', '1.2.2', True),
-                    ('g' * 40, '1.2.2', True), ('a' * 40, '1.2.0', True), ('a' * 40, '1.2.2', False)):
+            for commit, version, native in (('', '1.2.3', True), ('short', '1.2.3', True),
+                    ('g' * 40, '1.2.3', True), ('a' * 40, '1.2.0', True), ('a' * 40, '1.2.3', False)):
                 with self.subTest(commit=commit, version=version, native=native), self.assertRaises(SystemExit):
                     self.run_spec(work, ('--enable-windows-flash', '--source-commit', commit), version, native)
 

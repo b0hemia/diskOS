@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 /* theme_kit.c - the action registry and the active kit (see theme_kit.h). */
+#include "indic.h"
+#include "rowpool.h"
 #include "theme_kit.h"
 #include "theme.h"
 #include "screens.h"
@@ -190,8 +192,13 @@ static void pass(lv_obj_t *o, kit_role_t parent_role, int is_root, int on_top, i
          * descenders are not cut off) */
         if(lv_obj_check_type(o, &lv_label_class) && lv_label_get_long_mode(o) != LV_LABEL_LONG_WRAP){
             int32_t sh = lv_obj_get_style_height(o, 0);
-            int lh = lv_font_get_line_height(lv_obj_get_style_text_font(o, 0));
-            if(sh != LV_SIZE_CONTENT && !LV_COORD_IS_PCT(sh) && sh > 0 && sh < lh) lv_obj_set_height(o, lh);
+            int lh = indic_line_height(lv_label_get_text(o), lv_obj_get_style_text_font(o, 0));
+            if(sh != LV_SIZE_CONTENT && !LV_COORD_IS_PCT(sh) && sh > 0 && sh < lh) {
+                if(indic_text(lv_label_get_text(o))) {
+                    lv_obj_set_style_min_height(o, lh, LV_STATE_USER_4);
+                    lv_obj_add_state(o, LV_STATE_USER_4);
+                } else lv_obj_set_height(o, lh);
+            }
         }
         /* a label in a button that no longer fits (a wider theme face): step down to the theme's smaller sizes
          * (one line: content-sized, or clipped rather than wrapped) */
@@ -201,7 +208,7 @@ static void pass(lv_obj_t *o, kit_role_t parent_role, int is_root, int on_top, i
             int room = lv_obj_get_content_width(b);
             for(int k = 0; k < 3 && room > 0; k++){
                 const lv_font_t *f = lv_obj_get_style_text_font(o, 0);
-                lv_point_t sz; lv_text_get_size(&sz, lv_label_get_text(o), f, lv_obj_get_style_text_letter_space(o, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+                lv_point_t sz; indic_text_get_size(&sz, lv_label_get_text(o), f, lv_obj_get_style_text_letter_space(o, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
                 if(sz.x <= room) break;
                 const lv_font_t *sm = theme_font_smaller(f);
                 if(!sm) break;
@@ -229,6 +236,32 @@ void kit_restyle(lv_obj_t *root){
     ui_dialog_restyled(root);     /* fonts and borders may have changed: its dialogs are measured again */
 }
 
+/* A recycled row is restyled in isolation. Its labels survive; decorations can
+ * change shape with the logical row and are rebuilt without action handlers. */
+void kit_row_recycle(lv_obj_t *row, lv_obj_t **labels, int count){
+    kit_row_decor_reset(row);
+    for(int i = (int)lv_obj_get_child_count(row) - 1; i >= 0; i--){
+        lv_obj_t *child = lv_obj_get_child(row, i);
+        int keep = 0;
+        for(int j = 0; j < count; j++) if(child == labels[j]) keep = 1;
+        if(!keep) lv_obj_delete(child);
+    }
+    lv_obj_remove_state(row, LV_STATE_USER_4);
+    lv_obj_remove_style_all(row);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_USER_1 | LV_OBJ_FLAG_USER_2 | LV_OBJ_FLAG_USER_3 | KIT_DONE);
+    for(int j = 0; j < count; j++) if(labels[j]){
+        lv_obj_clean(labels[j]);
+        lv_obj_remove_style_all(labels[j]);
+        lv_obj_remove_state(labels[j], LV_STATE_USER_4);
+        lv_obj_remove_flag(labels[j], LV_OBJ_FLAG_USER_1 | LV_OBJ_FLAG_USER_2 | KIT_DONE | LV_OBJ_FLAG_HIDDEN);
+    }
+}
+void kit_row_rebind(lv_obj_t *row){
+    if(!theme_kit()->style) return;
+    lv_obj_update_layout(row);
+    pass(row, KIT_OTHER, 0, 0, 0);
+    if(theme_kit()->pass_end) theme_kit()->pass_end();
+}
 void kit_keep(lv_obj_t *obj){ if(obj) lv_obj_add_flag(obj, KIT_DONE); }
 void kit_button(lv_obj_t *obj){ if(obj) lv_obj_set_user_data(obj, &g_kit_button_tag); }
 void kit_isolate(lv_obj_t *obj){ if(obj) lv_obj_set_user_data(obj, &g_kit_isolated_tag); }

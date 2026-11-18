@@ -3,6 +3,8 @@
 #define DISKOS_DEVICE_NAMES_UI_H
 #include "screens.h"
 void dnui_init(void);
+void dnui_deliver(void);
+void dnui_radio(void);
 void dnui_create(lv_obj_t *);
 void dnui_open(int bluetooth); /* Settings action: 0 Device, 1 Bluetooth */
 void dnui_paired(const char *mac, const char *alias);

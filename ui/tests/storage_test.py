@@ -92,6 +92,7 @@ int mdb_total_song_count(void){ return 1; }
 int mdb_load_failed(void){ return 0; }
 static void albumwall_prewarm_seed(void){ test_seed++; }
 static void ui_library_check(void){ test_lib_checks++; }   /* Cover Flow refresh request; counted, not run */
+static void custom_picker_dark(void){}   /* no CustomCover preview is open in these storage fixtures */
 int ipc_send_cmd(const char *s){
     test_sends++;
     if(test_fail) return -1;

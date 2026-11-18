@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Host OS/arch detection and Snowsky-Disc device presence checks.
 
 Device USB identities we care about:

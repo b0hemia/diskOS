@@ -9,6 +9,8 @@
 enum { SOURCE_AIRPLAY = 0x101, SOURCE_USB_AUDIO = 0x200 };
 int modes_receiver_quiet(void); /* strict closed-PCM proof, no mutation */
 int modes_local_teardown(unsigned generation); /* one guarded Local reselect, no start */
+int modes_beam_lock(unsigned generation);       /* beam interlock: 0657000C0002 (NO_WORK_MODE) so the stock play/pause key cannot start the Disc */
+int modes_beam_unlock(void);                    /* the matching restore: 0657000C0008, for the CURRENT player generation (a restarted player loads the saved mode) */
 
 enum { OUT_INTERNAL = 0, OUT_SPDIF = 1, OUT_USB = 2 };
 

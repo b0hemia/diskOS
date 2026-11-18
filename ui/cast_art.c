@@ -174,7 +174,14 @@ int cast_art_airplay_fd(int fd, unsigned char **data, size_t *len)
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static char g_track[1024]; static unsigned g_gen;      /* guarded by g_mu; g_gen 0 never names a track */
-static void bump(void) { if (++g_gen == 0) ++g_gen; }
+static unsigned char *g_png;
+static size_t g_png_len;
+static unsigned g_png_gen, g_png_cache;
+static uint64_t g_png_storage;
+static void bump(void) {
+    if (++g_gen == 0) ++g_gen;
+    free(g_png); g_png = NULL; g_png_len = 0;
+}
 unsigned cast_art_arm(const char *track)
 {
     unsigned gen;
@@ -187,17 +194,31 @@ unsigned cast_art_arm(const char *track)
 }
 int cast_art_fetch(unsigned gen, unsigned char **png, size_t *len)
 {
-    char track[sizeof g_track], cover[600]; int stale;
+    char track[sizeof g_track], cover[600];
+    unsigned cache = artcache_gen(); uint64_t storage = sd_io_generation();
     *png = NULL; *len = 0;
+    if(!sd_io_allowed()) return -1;
     pthread_mutex_lock(&g_mu);
-    stale = !gen || gen != g_gen || !g_track[0];
-    if (!stale) memcpy(track, g_track, sizeof track);
+    if(!gen || gen != g_gen || !g_track[0]){ pthread_mutex_unlock(&g_mu); return -1; }
+    if(g_png && g_png_gen == gen && g_png_cache == cache && g_png_storage == storage &&
+       cache == artcache_gen() && storage == sd_io_generation() && sd_io_allowed()){
+        *png = malloc(g_png_len);
+        if(*png){ memcpy(*png, g_png, g_png_len); *len = g_png_len; }
+        pthread_mutex_unlock(&g_mu);
+        return *png ? 0 : -1;
+    }
+    memcpy(track, g_track, sizeof track);
     pthread_mutex_unlock(&g_mu);
-    if (stale || artcache_cover_candidate(track, cover, sizeof cover) || cast_art_png(cover, png, len)) return -1;
+    if(artcache_cover_candidate(track, cover, sizeof cover) || cast_art_png(cover, png, len)) return -1;
     pthread_mutex_lock(&g_mu);
-    stale = gen != g_gen;                                 /* another track was armed while this one was encoding */
+    int stale = gen != g_gen || cache != artcache_gen() || storage != sd_io_generation() || !sd_io_allowed();
+    if(!stale){
+        free(g_png); g_png = malloc(*len); g_png_len = 0;
+        if(g_png){ memcpy(g_png, *png, *len); g_png_len = *len; }
+        g_png_gen = gen; g_png_cache = cache; g_png_storage = storage;
+    }
     pthread_mutex_unlock(&g_mu);
-    if (stale) { free(*png); *png = NULL; *len = 0; return -1; }
+    if(stale){ free(*png); *png = NULL; *len = 0; return -1; }
     return 0;
 }
 void cast_art_clear(void)

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """SetupAPI inventory and isolated driver setup; no extra libusb DLL."""
 import ctypes as C
 import json

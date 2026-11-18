@@ -12,7 +12,7 @@
 void settings_restart_prompt(const char *note);
 void system_names_reset_applied(void);
 static lv_obj_t *root, *list, *dialog;
-static lv_timer_t *timer;
+static int initialized;
 static int field, fixture;
 static char selected[18], original[DN_BT_BYTES+1];
 static nr_snapshot view;
@@ -42,7 +42,7 @@ static void render(void);
 static void submit(nr_kind kind, const char *mac, const char *text, unsigned epoch){
     if(fixture) return;
     operation=nr_submit_at(kind,mac,text,epoch);
-    if(!operation){ ui_toast(tr("Names are busy - try again")); return; }
+    if(!operation){ ui_toast(tr(kind==NR_RESET ? "Couldn't start reset - nothing changed" : "Names are busy - try again")); return; }
     operation_paired=kind==NR_PAIRED;
     resetting=kind==NR_RESET; reset_notice=0; ui_toast(tr(resetting ? "Resetting..." : "Saving name..."));
 }
@@ -117,7 +117,8 @@ static void render(void){
         if(!view.names.saved_valid && !view.names.capability) label(list,"Reflash needed (1.2.2+).",THEME_FONT_UI_14);
     } else if(field==1 && !view.names.bluetooth_valid) label(list,"Saved Bluetooth name is invalid. Edit or reset it.",THEME_FONT_UI_14);
     else if(field==1 && view.bt_pending) label(list,"Saved. Applies when Bluetooth is available.",THEME_FONT_UI_14);
-    if(view.reset_pending) label(list,"Reset partly completed. Nickname clearing is pending.",THEME_FONT_UI_14);
+    if(view.reset_pending) label(list,view.reset_radio ? "Settings reset. Turn on Bluetooth to clear nicknames." :
+        "Reset partly completed. Nickname clearing is pending.",THEME_FONT_UI_14);
     action("Edit",edit,"names.edit");
     action(field==2 ? "Use original name" : "Reset this name",reset_name,"names.reset");
     kit_pass(root); ui_headers_fit(root);
@@ -125,8 +126,6 @@ static void render(void){
 static void poll_names(lv_timer_t *t){
     (void)t;
     if(fixture) return;
-    static uint32_t last_radio;
-    if(lv_tick_elaps(last_radio)>=3000){ last_radio=lv_tick_get(); nr_radio(bt_radio_on()); }
     nr_read(&view);
     if(view.settings_request){
         int result=sys_reset_settings();
@@ -138,17 +137,19 @@ static void poll_names(lv_timer_t *t){
     if(view.ready) first_ready=0;
     was_pending=view.reset_pending;
     if(operation && view.completed==operation && !(resetting && view.reset_pending && reset_notice)){
-        if(resetting && view.reset_pending) reset_notice=1; else operation=0;
+        if(resetting && view.result>=0 && view.reset_pending) reset_notice=1; else operation=0;
         if(operation_paired && !resetting && !view.result){
             if(screen_current()==SCR_DEVICE_NAMES) screen_back();
             bt_info_refresh();
         }
         if(resetting){
             if(view.result!=-1) system_names_reset_applied();
-            ui_toast(tr(view.result==-1 ? "Couldn't start reset - nothing changed" : view.reset_pending ?
+            ui_toast(tr(view.result==-1 ? "Couldn't start reset - nothing changed" : view.reset_radio ?
+                "Settings reset. Turn on Bluetooth to clear nicknames." : view.reset_pending ?
                 "Reset partly completed. Pending work will retry." : "Settings and names reset. Restart to finish."));
-            if(view.result!=-1) settings_restart_prompt(tr(view.reset_pending ?
-                "Reset partly completed. Pending work will retry after restart. Bluetooth stays off if it was off. Network defaults apply after reboot." :
+            if(view.result!=-1) settings_restart_prompt(tr(view.reset_pending ? (view.reset_radio ?
+                "Settings reset. Turn on Bluetooth to clear nicknames." :
+                "Reset partly completed. Pending work will retry after restart. Bluetooth stays off if it was off. Network defaults apply after reboot.") :
                 "Settings and names reset. Restart diskOS to finish. Network defaults apply after reboot."));
         } else ui_toast(tr(view.result==-1 ? "Couldn't save name" : view.result==-2 ?
             "Name replaced, but saving is uncertain. Restart to check." : view.bt_pending && field==1 ?
@@ -156,7 +157,9 @@ static void poll_names(lv_timer_t *t){
     }
     if(shown!=view.generation){ shown=view.generation; render(); }
 }
-void dnui_init(void){ if(!timer && !nr_start()){ nr_radio(bt_radio_on()); timer=lv_timer_create(poll_names,500,NULL); } }
+void dnui_init(void){ if(!initialized && !nr_start()){ nr_radio(bt_radio_on()); initialized=1; } }
+void dnui_deliver(void){poll_names(NULL);}
+void dnui_radio(void){if(initialized)nr_radio(bt_radio_on());}
 void dnui_create(lv_obj_t *r){ root=r; }
 void dnui_open(int bluetooth){
     field=!!bluetooth; selected[0]=0; fixture=0; dnui_init(); nr_read(&view);

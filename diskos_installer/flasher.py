@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Mask-ROM USB flashing - Python wrapper around the PROVEN native binaries
 (usbboot + the my_write6 DRAM NAND writer + the X2000 SPL). We do NOT reimplement
 the flashing protocol; we orchestrate it, watch it, and interpret the result.
@@ -39,7 +41,7 @@ class BaseRefused(FlashError):
 # Identified by its exact SHA-256 - not by a code offset - so an older writer that would ignore the base plan can
 # never be started. Its descriptor (magic "DGWD") must also agree on protocol, variant and capacity.
 WRITER_NAME = "my_write6_dram.bin"
-WRITER_SHA256 = "a3c3aa63e0c48f501181d542d9fa0526d36ded81e2e767f0c044af876674ea84"
+WRITER_SHA256 = "105f95bbd560f8f00596f55ca4de0b99750e7b29e0030225efbaaa24578b3a0d"
 PLAN_ADDR = "0xa0b00000"
 
 IMG_SIZE = 100663296
@@ -236,9 +238,16 @@ def _probe_helpers():
     """Confirm every bundled native tool can actually execute (and load its libs)
     BEFORE the destructive gate. Catches a noexec temp mount / missing dylibs while
     the device is still untouched. Non-zero exit is fine; an OSError is not."""
-    probes = [(bundle.native("usbboot"), ["--help"]),
-              (bundle.native("mksquashfs"), ["-version"]),
-              (bundle.native("unsquashfs"), ["-version"])]
+    usbboot = bundle.native("usbboot")
+    if platform_probe.host()[0] == "linux":
+        from .imagebuild import _squashfs_tools
+        mksq, unsq = _squashfs_tools()
+    else:
+        mksq = bundle.native("mksquashfs")
+        unsq = bundle.native("unsquashfs")
+    probes = [(usbboot, ["--help"]),
+              (mksq, ["-version"]),
+              (unsq, ["-version"])]
     for path, args in probes:
         try:
             subprocess.run([path] + args, env=bundle.native_env(path),

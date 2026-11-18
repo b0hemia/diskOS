@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (c) 2026 diskOS contributors
 """Installed-base gate: what the Disc must already be running before a rootfs can be written, and the flash plan that
 tells the NAND writer (flash/my_write6.c) to check it.

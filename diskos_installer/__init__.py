@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """diskOS installer - cross-platform (Linux/macOS) installer for the FiiO Snowsky Disc.
 
 The whole tool is Python; the two bricking-sensitive operations (the Ingenic
@@ -9,4 +11,4 @@ installs the two pip dependencies (pyusb, pycryptodome), then ``./diskos-install
 runs it. The GUI additionally needs the system's Tk; the flash step needs libusb-1.0.
 """
 
-__version__ = "1.2.2"
+__version__ = "1.2.3"

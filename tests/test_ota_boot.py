@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """S97 retained-bundle verification under the pinned firmware's real BusyBox ash.
 
 Private paths replace production paths; the complete shipped supervisor and worker run.
@@ -167,7 +169,7 @@ class RetainedBundleTests(unittest.TestCase):
         e.fault.unlink()
         e.restore_verifier()
         self.assertEqual(e.run(), want, e.log())
-        self.assertIn('ota: running', e.log())
+        self.assertIn('ota: selected', e.log())
 
     def test_tmp_creation_failure_keeps_good_and_trial(self):
         for kind in ('good', 'active'):

@@ -31,10 +31,10 @@ options.add_argument("--enable-windows-flash", action="store_true")
 options.add_argument("--source-commit", default="")
 capability = options.parse_args()
 if capability.enable_windows_flash and (
-        not platform_probe.windows_native_runtime() or __version__ != "1.2.2"
+        not platform_probe.windows_native_runtime() or __version__ != "1.2.3"
         or not re.fullmatch(r"[0-9a-f]{40}", capability.source_commit)):
     raise SystemExit("REFUSING to enable Windows flash: native x64 Windows CPython, "
-                     "version 1.2.2 and a full source commit SHA are required")
+                     "version 1.2.3 and a full source commit SHA are required")
 
 if capability.enable_windows_flash:
     def repository_git(*args):
@@ -176,6 +176,9 @@ if _os == "windows":
         Unlicense-or-MIT-0-dr_libs.txt Zlib-nanopb.txt
         BSD-3-Clause-SpeexDSP-resampler.txt MIT-libplist-jsmn.txt Zlib-LodePNG.txt
         MIT-or-Unlicense-stb_image_write.txt
+        HarfBuzz-COPYING SheenBidi-Apache-2.0.txt Unicode-License-v3.txt
+        OFL-Devanagari.txt OFL-Gurmukhi.txt OFL-Lato.txt
+        OFL-NotoNaskhArabic.txt OFL-NotoSansHebrew.txt
         BSL-1.0-dlg.txt CC-BY-4.0.txt CPython-3.12.10-Windows-LICENSE.txt
         CPython-3.12.10-Incorporated-Software.txt
         FTL-FreeType.txt Tk-8.6.15-license.terms.txt
@@ -188,7 +191,7 @@ if _os == "windows":
         CC0-1.0-SipHash.txt
         GPL-2.0-zstd.txt GPL-2.0.txt GPL-3.0.txt LGPL-2.1-libusb.txt
         LGPL-2.1.txt LICENSE-TJpgDec.txt LICENSE-dropbear.txt LZ4-LICENSE.txt
-        MIT-JSMN.txt MIT-LVGL.txt MIT-musl.txt MIT-qrcodegen.txt
+        MIT-JSMN.txt MIT-LVGL.txt MIT-musl.txt MIT-qrcodegen.txt MIT-diskos-pre-1.2.3.txt
         OFL-1.1-Archivo.txt OFL-1.1-CourierPrime.txt OFL-1.1-DSEG.txt OFL-1.1-Doto.txt
         OFL-1.1-FontAwesome.README.txt OFL-1.1-FontAwesome.txt
         OFL-1.1-IBMPlexMono.txt OFL-1.1-IBMPlexSans.txt OFL-1.1-Inter.txt

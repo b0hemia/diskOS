@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (C) 2026 diskOS contributors */
 /* Shared symlink-component check for custom saver and still-image conversion paths. */
 #ifndef PATH_NOSYMLINK_H
 #define PATH_NOSYMLINK_H

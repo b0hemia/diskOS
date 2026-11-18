@@ -535,6 +535,7 @@ static void cb_dl_cancel(lv_event_t *e){
 static void offer_delete(lv_event_t *e){ free(lv_event_get_user_data(e)); }
 static void cb_ota_go(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if(!ota_allowed()){ ui_toast(ota_err_text(OTA_E_OFF)); return; }
     int idle = 0;
     if(!atomic_compare_exchange_strong(&g_dl.state, &idle, 1)){ ui_toast("Already updating"); return; }
     memset(&g_dl.pg, 0, sizeof g_dl.pg);
@@ -738,6 +739,7 @@ static void ota_health_cb(lv_timer_t *t){
 void system_ota_note_playback(void){ atomic_store(&g_hl.play, 1); }
 void system_ota_health_init(void){
     if(!ota_trial_version(&OTA_DEV, g_hl.ver, sizeof g_hl.ver)) return;     /* only a trial build has anything to prove */
+    if(!ota_trial_maybe_me(&OTA_DEV)) return;   /* another build (fallback, hand-run) could never save Keep or Go back */
     if(ota_trial_decided(&OTA_DEV)) return;
     g_hl.t0 = lv_tick_get();
     g_hl_tm = lv_timer_create(ota_health_cb, 2000, NULL);

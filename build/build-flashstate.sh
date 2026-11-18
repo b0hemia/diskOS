@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Build with the current mipsel-n2008-musl-cross toolchain's bin/mipsel-linux-musl- prefix.
 # Release builds use fixed device paths, with no -D overrides.
 set -eu

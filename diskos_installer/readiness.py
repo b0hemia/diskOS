@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Read-only 'ready check' for the GUI checklist.
 
 probe() reads the host once (it can block on USB, so the GUI runs it off the UI thread);

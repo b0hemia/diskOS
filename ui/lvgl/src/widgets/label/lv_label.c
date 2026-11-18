@@ -128,6 +128,39 @@ lv_obj_t * lv_label_create(lv_obj_t * parent)
     return obj;
 }
 
+static void reset_layout(lv_obj_t *obj)
+{
+    lv_label_t *label = (lv_label_t *)obj;
+    if(label->layout_provider && label->layout_provider->destroy) label->layout_provider->destroy(obj);
+    label->layout_handle = 0;
+    label->layout_active = false;
+    label->layout_candidate = false;
+}
+
+static void accept_layout(lv_obj_t *obj)
+{
+    lv_label_t *label = (lv_label_t *)obj;
+    if(!label->layout_provider) return;
+    bool candidate = !label->layout_provider->accept || label->layout_provider->accept(label->text);
+    if(!candidate && label->layout_candidate) reset_layout(obj);
+    label->layout_candidate = candidate;
+}
+
+void lv_label_set_layout_provider(lv_obj_t *obj, const lv_label_layout_provider_t *provider)
+{
+    lv_label_t *label = (lv_label_t *)obj;
+    if(label->layout_provider && label->layout_provider->destroy) label->layout_provider->destroy(obj);
+    label->layout_provider = provider;
+    label->layout_handle = 0;
+    label->layout_context = 0;
+    label->layout_active = false;
+    label->layout_candidate = false;
+    accept_layout(obj);
+    /* Attaching an idle provider does not change the ordinary label path. */
+}
+uintptr_t lv_label_get_layout_handle(lv_obj_t *obj) { return ((lv_label_t *)obj)->layout_handle; }
+void lv_label_set_layout_handle(lv_obj_t *obj, uintptr_t handle) { ((lv_label_t *)obj)->layout_handle = handle; }
+
 /*=====================
  * Setter functions
  *====================*/
@@ -148,7 +181,7 @@ void lv_label_set_text(lv_obj_t * obj, const char * text)
     if(label->text == text && label->static_txt == 0) {
         label->text = lv_realloc(label->text, text_len);
         LV_ASSERT_MALLOC(label->text);
-        if(label->text == NULL) return;
+        if(label->text == NULL) { reset_layout(obj); return; }
 
 #if LV_USE_ARABIC_PERSIAN_CHARS
         lv_text_ap_proc(label->text, label->text);
@@ -164,7 +197,7 @@ void lv_label_set_text(lv_obj_t * obj, const char * text)
 
         label->text = lv_malloc(text_len);
         LV_ASSERT_MALLOC(label->text);
-        if(label->text == NULL) return;
+        if(label->text == NULL) { reset_layout(obj); return; }
 
         copy_text_to_label(label, text);
 
@@ -172,6 +205,7 @@ void lv_label_set_text(lv_obj_t * obj, const char * text)
         label->static_txt = 0;
     }
 
+    accept_layout(obj);
     lv_label_refr_text(obj);
 }
 
@@ -185,6 +219,7 @@ void lv_label_set_text_fmt(lv_obj_t * obj, const char * fmt, ...)
 
     /*If text is NULL then refresh*/
     if(fmt == NULL) {
+        accept_layout(obj);
         lv_label_refr_text(obj);
         return;
     }
@@ -200,6 +235,7 @@ void lv_label_set_text_fmt(lv_obj_t * obj, const char * fmt, ...)
     va_end(args);
     label->static_txt = 0; /*Now the text is dynamically allocated*/
 
+    accept_layout(obj);
     lv_label_refr_text(obj);
 }
 
@@ -218,6 +254,7 @@ void lv_label_set_text_static(lv_obj_t * obj, const char * text)
         label->text       = (char *)text;
     }
 
+    accept_layout(obj);
     lv_label_refr_text(obj);
 }
 
@@ -666,6 +703,7 @@ void lv_label_cut_text(lv_obj_t * obj, uint32_t pos, uint32_t cnt)
     lv_text_cut(label_txt, pos, cnt);
 
     /*Refresh the label*/
+    accept_layout(obj);
     lv_label_refr_text(obj);
 }
 
@@ -711,6 +749,7 @@ static void lv_label_destructor(const lv_obj_class_t * class_p, lv_obj_t * obj)
     LV_UNUSED(class_p);
     lv_label_t * label = (lv_label_t *)obj;
 
+    if(label->layout_provider && label->layout_provider->destroy) label->layout_provider->destroy(obj);
     lv_label_dot_tmp_free(obj);
     if(!label->static_txt) lv_free(label->text);
     label->text = NULL;
@@ -756,7 +795,8 @@ static void lv_label_event(const lv_obj_class_t * class_p, lv_event_t * e)
 
             w = LV_MIN(w, lv_obj_get_style_max_width(obj, 0));
 
-            lv_text_get_size(&label->size_cache, label->text, font, letter_space, line_space, w, flag);
+            if(!label->layout_provider || !label->layout_candidate || !label->layout_provider->measure(obj, &label->size_cache, w, flag, false))
+                lv_text_get_size(&label->size_cache, label->text, font, letter_space, line_space, w, flag);
             label->invalid_size_cache = false;
         }
 
@@ -801,6 +841,8 @@ static void draw_main(lv_event_t * e)
         label_draw_dsc.sel_color = lv_obj_get_style_text_color_filtered(obj, LV_PART_SELECTED);
         label_draw_dsc.sel_bg_color = lv_obj_get_style_bg_color(obj, LV_PART_SELECTED);
     }
+
+    if(label->layout_active && label->layout_provider->draw(obj, layer, &label_draw_dsc, &txt_coords)) return;
 
     /* In SCROLL and SCROLL_CIRCULAR mode the CENTER and RIGHT are pointless, so remove them.
      * (In addition, they will create misalignment in this situation)*/
@@ -896,7 +938,7 @@ static void overwrite_anim_property(lv_anim_t * dest, const lv_anim_t * src, lv_
 static void lv_label_refr_text(lv_obj_t * obj)
 {
     lv_label_t * label = (lv_label_t *)obj;
-    if(label->text == NULL) return;
+    if(label->text == NULL) { reset_layout(obj); return; }
 #if LV_LABEL_LONG_TXT_HINT
     label->hint.line_start = -1; /*The hint is invalid if the text changes*/
 #endif
@@ -913,7 +955,21 @@ static void lv_label_refr_text(lv_obj_t * obj)
     lv_point_t size;
     lv_text_flag_t flag = get_label_flags(label);
 
-    lv_text_get_size(&size, label->text, font, letter_space, line_space, max_w, flag);
+    label->layout_active = label->layout_provider && label->layout_candidate && label->layout_provider->measure(obj, &size, max_w, flag, true);
+    if(label->layout_candidate) {
+        /* An old nominal DOT buffer belongs to the previous source text. */
+        lv_label_dot_tmp_free(obj);
+        label->dot_end = LV_LABEL_DOT_END_INV;
+    }
+    if(!label->layout_active)
+        lv_text_get_size(&size, label->text, font, letter_space, line_space, max_w, flag);
+    bool rtl = label->layout_active && label->layout_provider->direction_rtl &&
+        label->layout_provider->direction_rtl(obj);
+    if(rtl != label->layout_rtl) {
+        lv_anim_delete(obj,set_ofs_x_anim);
+        lv_point_set(&label->offset,0,0);
+        label->layout_rtl = rtl;
+    }
 
     lv_obj_refresh_self_size(obj);
 
@@ -952,7 +1008,13 @@ static void lv_label_refr_text(lv_obj_t * obj)
             end = lv_area_get_width(&txt_coords) - size.x;
 #endif
 
+            if(label->layout_active && label->layout_provider->direction_rtl &&
+               label->layout_provider->direction_rtl(obj)) {
+                start = lv_area_get_width(&txt_coords) - size.x; end = 0;
+            }
             lv_anim_set_values(&a, start, end);
+            lv_anim_t *initial = lv_anim_get(obj, set_ofs_x_anim);
+            if(!initial || (initial->start_value != start && initial->end_value != start)) label->offset.x = start;
             lv_anim_set_exec_cb(&a, set_ofs_x_anim);
 
             lv_anim_t * anim_cur = lv_anim_get(obj, set_ofs_x_anim);
@@ -1060,6 +1122,14 @@ static void lv_label_refr_text(lv_obj_t * obj)
 #else
             lv_anim_set_values(&a, 0, -size.x - lv_font_get_glyph_width(font, ' ', ' ') * LV_LABEL_WAIT_CHAR_COUNT);
 #endif
+            if(label->layout_active && label->layout_provider->direction_rtl &&
+               label->layout_provider->direction_rtl(obj)) {
+                int32_t first = lv_area_get_width(&txt_coords) - size.x;
+                lv_anim_set_values(&a, first, first + size.x +
+                    lv_font_get_glyph_width(font, ' ', ' ') * LV_LABEL_WAIT_CHAR_COUNT);
+                lv_anim_t *initial = lv_anim_get(obj, set_ofs_x_anim);
+                if(!initial || initial->start_value != first) label->offset.x = first;
+            }
             lv_anim_set_exec_cb(&a, set_ofs_x_anim);
             lv_anim_set_duration(&a, anim_time);
 
@@ -1109,7 +1179,7 @@ static void lv_label_refr_text(lv_obj_t * obj)
             label->offset.y = 0;
         }
     }
-    else if(label->long_mode == LV_LABEL_LONG_DOT) {
+    else if(label->long_mode == LV_LABEL_LONG_DOT && !label->layout_active && !label->layout_candidate) {
         if(size.y <= lv_area_get_height(&txt_coords)) { /*No dots are required, the text is short enough*/
             label->dot_end = LV_LABEL_DOT_END_INV;
         }

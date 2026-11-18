@@ -158,7 +158,7 @@ static void detail_refresh_async(void *u){
 }
 static void theme_reload_or_revert(const char *key){
     const char *destination = !strcmp(key, "outdoor") ? "settings:outdoor" : "settings";
-    if(ui_theme_reload(destination) == 0) return;        /* not reached on success: the exec replaced us */
+    if(ui_theme_reload_setting(destination,key,g_set_prev) == 0) return;        /* not reached on success: the exec replaced us */
     cfg_set_int(key, g_set_prev);
     lv_async_call(detail_refresh_async, NULL);
 }
@@ -333,7 +333,10 @@ static void apply_timezone(int v){
         lv_async_call(detail_refresh_async, NULL);
         return;
     }
-    theme_reload_or_revert("tz_idx");                  /* the UI re-reads the zone rules at start */
+    if(ui_theme_reload("settings") != 0){              /* the installed zone and RTC already match */
+        ui_toast("Time zone saved - restart to update clock");
+        lv_async_call(detail_refresh_async, NULL);
+    }
 }
 static void apply_import_m3u(int v){ (void)v;
     int n = mdb_import_m3u_sd("/tmp/sdcard");   /* every folder on the card (bounded walk), like stock V2.57 */
@@ -626,7 +629,8 @@ static void backlight_write(int v){
  * alike - and the release lights the latest. Zero still goes out at once (screen off is immediate). */
 static int g_bl_hold, g_bl_held;   /* UI thread */
 void ui_backlight(int v){
-    if(v < 0) v = 0; if(v > 40) v = 40;
+    if(v < 0) v = 0;
+    if(v > 40) v = 40;
     if(g_bl_hold){ g_bl_held = v; if(v > 0) return; }
     backlight_write(v);
 }
@@ -659,7 +663,8 @@ void settings_apply_startup(int restore_brightness){
 
 /* shared brightness API (used by Quick Settings too) - persists the value */
 void ui_set_brightness(int v){
-    if(v < 1) v = 1; if(v > 40) v = 40;
+    if(v < 1) v = 1;
+    if(v > 40) v = 40;
     apply_brightness(v);
     cfg_set_int("brightness", v);
 }
@@ -803,7 +808,17 @@ static void set_val(const setting_t *s, int v){
     /* EQ and automatic checks persist after success; stock owns codec storage. */
     g_set_prev = get_val(s);
     if(s->cfg_key && strcmp(s->cfg_key, "eq_preset") && strcmp(s->cfg_key, "bt_codec") &&
-       strcmp(s->cfg_key, "ota_auto")) cfg_set_int(s->cfg_key, v);
+       strcmp(s->cfg_key, "ota_auto")){
+        cfg_begin();
+        int bad = cfg_set_int_deferred(s->cfg_key, v);
+        int rc = cfg_commit();
+        if(bad || (rc && rc != -2)){
+            ui_toast("Could not save");
+            lv_async_call(detail_refresh_async, NULL);
+            return;
+        }
+        if(rc == -2) ui_toast("Saved - not confirmed yet");
+    }
     if(s->apply) s->apply(v);
 }
 /* "1.2.0 (8c29ecbf)": the release plus the first 8 hex of the RUNNING binary's md5 - the build id used in every
@@ -903,7 +918,7 @@ static void rescan_row_tick(lv_timer_t *t){
         lv_label_set_text(rr->lbl, b);
         lv_label_set_text(rr->vl, tr("Stop"));
     } else {
-        lv_label_set_text(rr->lbl, tr("Rescan Library"));
+        lv_label_set_text(rr->lbl, tr(mdb_sort_rescan_needed() ? "Rescan for sort tags" : "Rescan Library"));
         lv_label_set_text(rr->vl, tr("Scan"));
     }
 }

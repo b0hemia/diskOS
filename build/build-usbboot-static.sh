@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # build-usbboot-static.sh - build a portable, fully-static `usbboot` for Linux.
 #
 # The distro's libusb-1.0.a is built WITH udev, so linking against it drags in

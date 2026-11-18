@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (c) 2026 diskOS contributors
 """The build-time OTA option: default OFF, --no-ota is absolute, --ota-key bakes the given public key."""
 import base64
@@ -57,7 +57,7 @@ class OtaOptionTests(unittest.TestCase):
         with self._payload(self.payload_key):
             cfg = imagebuild.resolve_ota_config()
         self.assertEqual(cfg["epochs"],
-                         b"MIN_KEY_EPOCH=1\nMIN_UI_EPOCH=7\n")
+                         b"MIN_KEY_EPOCH=1\nMIN_UI_EPOCH=8\n")
 
     def test_floor_overrides_keep_their_precedence(self):
         os.environ["DISKOS_MIN_UI_EPOCH"] = "9"

@@ -34,6 +34,7 @@ static void rgb2hsv(int r,int g,int b,int*h,int*s,int*v){
     *s=(int)((mx>0?d/mx:0)*100+0.5f); *v=(int)(mx*100+0.5f);
 }
 
+static int g_pending_changed;
 static int g_pending_rgb = 0xF23260;   /* last live colour; persisted on slider release */
 
 
@@ -47,6 +48,7 @@ static void slider_cb(lv_event_t *e){
     int r,gg,b; hsv2rgb(h,s,v,&r,&gg,&b);
     int rgb = (r<<16)|(gg<<8)|b;
     g_pending_rgb = rgb;
+    g_pending_changed = 1;
     if(g_preview) lv_obj_set_style_bg_color(g_preview, theme_color_from_rgb(rgb), 0);
     if(g_dyn_btn) lv_obj_set_style_border_width(g_dyn_btn, 0, 0);   /* leaving dynamic */
     ui_set_accent_config(1, rgb);
@@ -54,7 +56,8 @@ static void slider_cb(lv_event_t *e){
 /* persist only when the finger lifts -> one durable cfg write per adjustment, not per tick. */
 static void slider_release_cb(lv_event_t *e){
     (void)e;
-    if(g_loading) return;
+    if(g_loading || !g_pending_changed) return;
+    g_pending_changed = 0;
     cfg_set_int("accent_mode", 1);
     cfg_set_int("accent_color", g_pending_rgb);
 }
@@ -68,6 +71,7 @@ static void dynamic_cb(lv_event_t *e){
 
 /* seed the sliders + preview from the saved colour (called on open) */
 void colorpick_open(void){
+    g_pending_changed = 0;
     int mode = cfg_get_int("accent_mode", 0);
     int rgb  = cfg_get_int("accent_color", 0xF23260);
     int h,s,v; rgb2hsv((rgb>>16)&0xFF,(rgb>>8)&0xFF,rgb&0xFF,&h,&s,&v);

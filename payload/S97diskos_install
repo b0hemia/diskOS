@@ -130,10 +130,11 @@ quarantine() {
         rm -f /usr/data/mq_ui 2>/dev/null                     # last resort: remove the override binary
         if override_on; then
             log "CRITICAL: could NOT disable diskOS override${1:+ ($1)} (fs unwritable?) -- unverified UI MAY run"
+            log "final outcome -> installer failed to disable override; UI launch outcome unconfirmed"
             return 1
         fi
     fi
-    log "quarantined${1:+ ($1)} -> stock UI will run"
+    log "quarantined${1:+ ($1)} -> override disabled"
     return 0
 }
 
@@ -178,9 +179,16 @@ ready() {
     if [ "${BUILD:-flashed}" = flashed ]; then rm -f /tmp/.diskos_run 2>/dev/null; else write_run; fi
     : > /tmp/.diskos_ready 2>/dev/null
 }
-disarm() { ready; for s in $SIGS; do trap - "$s" 2>/dev/null || true; done; }
+disarm() { ready; _ready_log=$?
+    if [ "$_ready_log" = 0 ]; then
+        log "final outcome -> diskOS override ready; UI launch pending"
+    else
+        log "final outcome -> stock UI will run"
+    fi
+    for s in $SIGS; do trap - "$s" 2>/dev/null || true; done
+}
 installed=0
-for s in $SIGS; do trap '[ "$installed" = 1 ] || quarantine "signal"; exit 1' "$s" 2>/dev/null || true; done
+for s in $SIGS; do trap '[ "$installed" = 1 ] || quarantine "signal"; log "final outcome -> installer interrupted; UI launch outcome unconfirmed"; exit 1' "$s" 2>/dev/null || true; done
 
 # TO: run a command under a hard time bound. Prefer SIGKILL (-s KILL) so a stuck-but-killable op
 # is force-terminated, not just SIGTERM'd. Falls back to running directly only if `timeout` is
@@ -480,7 +488,7 @@ ota_select() {
         if [ -d "$UPD/good.prev" ] && ota_bundle_ok "$UPD/good.prev" "$OTA_MINUI"; then
             P_SHA=$O_SHA; P_SIZE=$O_SIZE; P_EPOCH=$O_EPOCH; P_VER=$O_VER      # and the one before it, while it is kept
         fi
-        log "ota: running $BUILD build $B_VER (epoch $B_EPOCH)"
+        log "ota: selected $BUILD build $B_VER (epoch $B_EPOCH)"
     fi
 }
 # A baseline transition never parses retained OTA records or selects an OTA this boot.
@@ -528,7 +536,7 @@ if verify_ui /usr/data/mq_ui; then
     if publish_symlink; then
         installed=1
         rm -f /usr/data/mq_ui.rejected 2>/dev/null   # a stale quarantine copy (the live binary is verified)
-        log "already installed + verified -> repaired +x/symlink, booting diskOS"
+        log "already installed + verified -> repaired +x/symlink"
         disarm                                  # publish readiness AFTER the last NAND write, so a worker
         exit 0                                  # killed during that write does not leave diskOS enabled
     fi
@@ -542,8 +550,10 @@ fi
 # leave the unverified binary enabled for S98 to launch. A successful install below republishes
 # a verified one. (The whole-run trap above already covers signals; this closes the window
 # deterministically even absent a signal.)
+replacing_ui_log=0
 if [ -e /usr/data/mq_ui ] || [ -e /usr/data/mq_player ]; then
     quarantine "unverified at boot" || exit 1
+    replacing_ui_log=1
 fi
 
 # INSTALL PATH: the copy EMBEDDED in this rootfs at /opt/diskos/mq_ui (present after a diskOS flash) is
@@ -558,6 +568,7 @@ if [ -f "$EMBED" ]; then
     # hard-linked when it can be (no second copy on the small /usr/data); verify_ui hashes the very inode.
     if stage_tmp && verify_ui /usr/data/.mq_ui.tmp; then
         copied=1; src=embedded; log "staged verified UI from embedded rootfs copy ($EMBED)"
+        [ "$replacing_ui_log" != 1 ] || log "replacing unverified /usr/data/mq_ui with the verified build"
     else
         rm -f /usr/data/.mq_ui.tmp 2>/dev/null
         log "embedded UI absent or failed verify"
@@ -570,7 +581,7 @@ fi
 # fallback only ever mattered for recovery. If the embedded copy is absent or fails verification, nothing is
 # installed this boot, readiness is not published, and the device boots stock. The card is never touched.
 if [ "$copied" != 1 ]; then
-    log "embedded UI unavailable or unverified -> not installing this boot (SD fallback disabled); stock boots"
+    log "embedded UI unavailable or unverified -> not installing this boot (SD fallback disabled)"
 fi
 
 if [ "$copied" = 1 ]; then

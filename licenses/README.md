@@ -5,6 +5,14 @@ bundles. See `../NOTICE.md` for the component->license mapping and the static-li
 
 | Component (bundled) | License | Full text |
 |---|---|---|
+| Unicode 17.0.0 bidi conformance data (`tools/hbcanary/bidi/`, test fixtures only) | Unicode-3.0 (Unicode License v3) | [`Unicode-License-v3.txt`](Unicode-License-v3.txt) (verbatim from https://www.unicode.org/license.txt) |
+| HarfBuzz 14.6.0 | Old MIT (library); MIT, OFL-1.1, Apache-2.0 and public-domain corpus terms in retained subtrees | [`HarfBuzz-COPYING`](HarfBuzz-COPYING); additional notices under `../ui/third_party/harfbuzz-14.6.0/` |
+| SheenBidi 3.0.0 | Apache-2.0 | [`SheenBidi-Apache-2.0.txt`](SheenBidi-Apache-2.0.txt) |
+| Noto Sans Gurmukhi / Gurmukhi UI (canary and embedded faces) | OFL-1.1 | [`OFL-Gurmukhi.txt`](OFL-Gurmukhi.txt) |
+| Noto Sans Devanagari (canary and embedded faces) | OFL-1.1 | [`OFL-Devanagari.txt`](OFL-Devanagari.txt) |
+| Noto Naskh Arabic (canary and embedded face) | OFL-1.1 | [`OFL-NotoNaskhArabic.txt`](OFL-NotoNaskhArabic.txt) |
+| Noto Sans Hebrew (canary and embedded face) | OFL-1.1 | [`OFL-NotoSansHebrew.txt`](OFL-NotoSansHebrew.txt) |
+| Lato Regular (HarfBuzz canary) | OFL-1.1 | [`OFL-Lato.txt`](OFL-Lato.txt) |
 | usbboot | GPL-2.0-or-later | [`GPL-2.0.txt`](GPL-2.0.txt) |
 | squashfs-tools 4.6.1 (Linux), 4.7.5 (macOS arm64) | GPL-2.0-or-later | [`GPL-2.0.txt`](GPL-2.0.txt) |
 | liblzo2 (static in mksquashfs/unsquashfs) | GPL-2.0-or-later | [`GPL-2.0.txt`](GPL-2.0.txt) |
@@ -14,9 +22,9 @@ bundles. See `../NOTICE.md` for the component->license mapping and the static-li
 | lz4 1.10.0 library (macOS arm64 dylib) | BSD-2-Clause | [`BSD-2-Clause-lz4.txt`](BSD-2-Clause-lz4.txt), [`LZ4-LICENSE.txt`](LZ4-LICENSE.txt), copied from the source tarball |
 | xz 5.8.4 liblzma (macOS arm64 dylib) | 0BSD; source also contains GPL-2.0-or-later parts | [`0BSD-xz.txt`](0BSD-xz.txt), [`XZ-COPYING.txt`](XZ-COPYING.txt), [`GPL-2.0.txt`](GPL-2.0.txt) |
 | zstd 1.5.7 library (macOS arm64 dylib) | BSD-3-Clause or GPL-2.0-only; source also has MIT/BSD-2-Clause parts | [`BSD-3-Clause-zstd.txt`](BSD-3-Clause-zstd.txt), [`GPL-2.0-zstd.txt`](GPL-2.0-zstd.txt); full source in `../corresponding-source/macos-arm64/` |
-| glibc (static in usbboot/mksquashfs/unsquashfs) | LGPL-2.1-or-later | [`LGPL-2.1.txt`](LGPL-2.1.txt); corresponding source in `../corresponding-source/glibc_2.39*` (see `../NOTICE.md` for the relink path) |
+| glibc (static in Linux usbboot) | LGPL-2.1-or-later | [`LGPL-2.1.txt`](LGPL-2.1.txt); corresponding source in `../corresponding-source/glibc_2.39*` (see `../NOTICE.md` for the relink path) |
 | PyInstaller bootloader (Windows package and self-built onefile) | GPL-2.0 + bootloader exception | [`PyInstaller-COPYING.txt`](PyInstaller-COPYING.txt), [`GPL-2.0.txt`](GPL-2.0.txt) + exception note in `../NOTICE.md` |
-| zlib / liblzma (static in squashfs-tools) | zlib / public-domain | permissive notices accompany the library sources; see `../corresponding-source/README.md` |
+| zlib 1.3.2 / liblzma (xz 5.8.4) (static in Linux squashfs-tools) | zlib / 0BSD | notices accompany the sources in `../corresponding-source/linux-squashfs-musl/`; see also [`0BSD-xz.txt`](0BSD-xz.txt) and [`XZ-COPYING.txt`](XZ-COPYING.txt) |
 | pyusb | BSD-3-Clause | [`BSD-3-Clause-pyusb.txt`](BSD-3-Clause-pyusb.txt) (verbatim from pyusb 1.3.1) |
 | pycryptodome | BSD-2-Clause + public-domain; CC0 SipHash | [`pycryptodome-LICENSE.txt`](pycryptodome-LICENSE.txt) retains the upstream wording with LF newlines; [`PyCryptodome-3.23.0-Windows-LICENSE.rst`](PyCryptodome-3.23.0-Windows-LICENSE.rst) is the exact locked Windows wheel's CRLF copy. [`PyCryptodome-3.23.0-Windows-NOTICES.txt`](PyCryptodome-3.23.0-Windows-NOTICES.txt) preserves runtime-module notices and the wheel's OCB patent statement. Native source comments: [`PyCryptodome-3.23.0-Native-NOTICES.txt`](PyCryptodome-3.23.0-Native-NOTICES.txt); LibTomCrypt dedication: [`PyCryptodome-3.23.0-libtom-LICENSE.txt`](PyCryptodome-3.23.0-libtom-LICENSE.txt); complete SipHash dedication: [`CC0-1.0-SipHash.txt`](CC0-1.0-SipHash.txt) |
 | certifi 2026.2.25 | MPL-2.0 | [`MPL-2.0-certifi.txt`](MPL-2.0-certifi.txt), verbatim wheel bundle notice; complete licence: [`MPL-2.0.txt`](MPL-2.0.txt) |
@@ -29,8 +37,8 @@ bundles. See `../NOTICE.md` for the component->license mapping and the static-li
 | Windows Tcl/Tk 8.6.15 | Tcl-Tk permissive and incorporated terms; Tango script declares CC BY-SA 3.0 | CPython's Tcl base notice matches supplied upstream Tcl 8.6.15 after newline normalization. [`Tk-8.6.15-license.terms.txt`](Tk-8.6.15-license.terms.txt) is the exact-install Tk text. Tcl incorporated texts: [`Tcl-8.6.15-regex-NOTICE.txt`](Tcl-8.6.15-regex-NOTICE.txt), [`Tcl-8.6.15-libtommath-LICENSE.txt`](Tcl-8.6.15-libtommath-LICENSE.txt), [`Tcl-8.6.15-Bison-NOTICE.txt`](Tcl-8.6.15-Bison-NOTICE.txt), [`Tcl-8.6.15-zlib-LICENSE.txt`](Tcl-8.6.15-zlib-LICENSE.txt). Tk native and runtime script headers: [`Tk-8.6.15-Incorporated-NOTICES.txt`](Tk-8.6.15-Incorporated-NOTICES.txt). Startup-required icons.tcl keeps [`CC-BY-SA-3.0-Tango.txt`](CC-BY-SA-3.0-Tango.txt). Windows builds exclude images/ and mkpsenc.tcl, including Adobe EPS procsets and glyph data |
 | Microsoft VC runtime 14.42.34438.0 | Microsoft Distributable Code redistributed with CPython 3.12.10 | CPython's "Additional Conditions for this Windows binary build" are shipped verbatim at Windows notice lines 283-320. Microsoft's terms govern; [Visual Studio 2022 redistribution list](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution), "Visual C++ Runtime Files". Microsoft components remain under Microsoft's terms, outside this project's licences. Redistributors must satisfy Microsoft's conditions; the "licensed Visual Studio user" condition is a separate Microsoft-terms question. |
 | MSYS2 runtime 3.6.10 (both packaged copies) | LGPL-3.0-or-later with Cygwin linking exception; newlib/BSD/per-file terms | Full five-file notice set indexed in [`windows/README.md`](windows/README.md) |
-| Archivo (MIT installer GUI: pre-rendered titles in `diskos_installer/assets/display*.png` and lettering in `wordmark*.png`) | OFL-1.1 (font) | [`LICENSE-archivo-OFL.txt`](../diskos_installer/assets/LICENSE-archivo-OFL.txt) |
-| Michroma (MIT installer GUI: pre-rendered section kickers in `diskos_installer/assets/display*.png`) | OFL-1.1 (font) | [`LICENSE-michroma-OFL.txt`](../diskos_installer/assets/LICENSE-michroma-OFL.txt) |
+| Archivo (installer GUI: pre-rendered titles in `diskos_installer/assets/display*.png` and lettering in `wordmark*.png`) | OFL-1.1 (font) | [`LICENSE-archivo-OFL.txt`](../diskos_installer/assets/LICENSE-archivo-OFL.txt) |
+| Michroma (installer GUI: pre-rendered section kickers in `diskos_installer/assets/display*.png`) | OFL-1.1 (font) | [`LICENSE-michroma-OFL.txt`](../diskos_installer/assets/LICENSE-michroma-OFL.txt) |
 | LVGL (diskOS UI) | MIT | [`MIT-LVGL.txt`](MIT-LVGL.txt) (verbatim from `../ui/lvgl/LICENCE.txt`) |
 | FreeType 2.13.3 (diskOS UI, new in 1.2.1) | FreeType License (FTL) | [`FTL-FreeType.txt`](FTL-FreeType.txt) (verbatim from `../ui/third_party/freetype-2.13.3/docs/FTL.TXT`) |
 | dlg headers retained in FreeType's include tree, Copyright (c) 2019 nyorain | BSL-1.0 | [`BSL-1.0-dlg.txt`](BSL-1.0-dlg.txt) (standard complete BSL-1.0 text, byte-identical to the copy GCC ships as `libphobos/src/LICENSE_1_0.txt`) |
@@ -47,7 +55,7 @@ bundles. See `../NOTICE.md` for the component->license mapping and the static-li
 | Noto Sans, Noto Sans Hebrew (Hebrew new in 1.2.2; `font_intl_14` to `font_intl_20` in `mq_ui`) | OFL-1.1 | [`OFL-1.1-NotoSans.txt`](OFL-1.1-NotoSans.txt) |
 | JSMN (diskOS UI JSON parser) | MIT | [`MIT-JSMN.txt`](MIT-JSMN.txt) (verbatim from `../ui/jsmn.h`, (c) 2010 Serge Zaitsev) |
 | Font Awesome Free glyphs (via LVGL `LV_SYMBOL_*`) | OFL-1.1 (fonts) + CC-BY-4.0 (icons) | [`OFL-1.1-FontAwesome.txt`](OFL-1.1-FontAwesome.txt) (Fonticons' own LICENSE.txt: full OFL-1.1 + MIT; also covers the diskOS Beam glyph U+F8D0, OFL-1.1) + [`CC-BY-4.0.txt`](CC-BY-4.0.txt) |
-| musl libc (static in diskOS UI `mq_ui`) | MIT | [`MIT-musl.txt`](MIT-musl.txt) |
+| musl libc (static in diskOS UI `mq_ui` and Linux `mksquashfs`/`unsquashfs`) | MIT | [`MIT-musl.txt`](MIT-musl.txt) |
 | LodePNG 20230410 (Cast artwork PNG encoder in `mq_ui`, via LVGL) | zlib | [`Zlib-LodePNG.txt`](Zlib-LodePNG.txt) (lines 1-24 of `lodepng.c`) |
 | gifdec (GIF decoder in `mq_ui`, via LVGL) | Public domain upstream; LVGL changes MIT | [`MIT-LVGL.txt`](MIT-LVGL.txt); upstream dedication: https://github.com/lecram/gifdec |
 | SQLite (amalgamation in `mq_ui`) | Public domain | https://sqlite.org/copyright.html (no license text required) |
@@ -260,14 +268,20 @@ sidecar for tk86t.dll/_tkinter.pyd and all three crypto sidecars for any
 Crypto/**/*.pyd.
 
 ## diskOS's own license
-The **Python installer, build scripts, and docs** are licensed **MIT** - `Copyright (c) 2026 diskOS
-contributors`. See [`../LICENSE`](../LICENSE). The installer GUI is MIT tooling; the
+diskOS is free software under the **GNU GPL v3.0 or later** (`../LICENSE`); third-party components keep
+their own licences (see [`../NOTICE.md`](../NOTICE.md)). The **Python installer, build scripts, and docs**
+are licensed **GPL-3.0-or-later** - `Copyright (c) 2026 diskOS contributors`. Releases up to 1.2.2 published
+them under MIT; that text is kept as [`MIT-diskos-pre-1.2.3.txt`](MIT-diskos-pre-1.2.3.txt). The one
+MIT exception is the stock-audio helper (`../ui/audio_stock_wire.h`, `../ui/tools/audio_stock_start.S`,
+`../ui/tools/diskos_audiodec.c`, `../ui/third_party/build-stock-audiodec.sh`, see
+`../ui/tools/AUDIO_STOCK_LICENSE`): it loads the Disc's stock FFmpeg, which FiiO configured with
+`--enable-nonfree`, so it stays MIT on purpose. The installer GUI is GPL tooling; the
 Archivo and Michroma font notices for its pre-rendered lettering are linked above
 and ship beside `display*.png`, `wordmark*.png` and `disc*.png` in
 `../diskos_installer/assets/`. The disc illustration contains no font lettering.
 No fonts are installed on the computer. The **diskOS UI source** (`ui/`, built to
 `payload/mq_ui`) is licensed **GPL-3.0-or-later** (`GPL-3.0.txt`, `../ui/COPYING`; (c) diskOS
-contributors) - deliberately separate from the MIT tooling so UI forks stay open. The UI is based in part on the work of the FreeType Team.
+contributors), the same licence as the tooling since 1.2.3. The UI is based in part on the work of the FreeType Team.
 Its embedded third-party notices - LVGL (MIT), SQLite (public domain), JSMN (MIT), md5 (public domain), and
 Montserrat / Source Han Sans / Font Awesome / IBM Plex Mono / Doto and the theme fonts (Inter, DSEG7 Classic, JetBrains Mono, Space Grotesk, IBM Plex Sans, Nunito, Courier Prime, Rubik Glitch, Archivo) (OFL-1.1) - ship in this directory and in
 `../ui/licenses/`.
@@ -275,9 +289,9 @@ Montserrat / Source Han Sans / Font Awesome / IBM Plex Mono / Doto and the theme
 ## Website
 
 The HTML, CSS, JavaScript, and diskOS-owned screenshot images in `../site/` are
-MIT licensed under [`../LICENSE`](../LICENSE), Copyright (c) 2026 diskOS contributors.
+GPL-3.0-or-later under [`../LICENSE`](../LICENSE), Copyright (c) 2026 diskOS contributors.
 This grant covers only rights held by diskOS contributors; third-party artwork and
-trademarks remain with their respective owners. The UI source remains GPL-3.0-or-later.
+trademarks remain with their respective owners.
 
 ### Website fonts
 
@@ -300,4 +314,4 @@ texts ship beside them in `../site/fonts/`; their upstream copyrights are retain
 Special Elite's embedded copyright notice reads: Copyright (c) 2010 by Brian J.
 Bonislawsky DBA Astigmatic (AOETI). All rights reserved. Available under the Apache
 2.0 licence. The font retains that notice in its name table; the full Apache-2.0
-text is shipped alongside it. These font licences do not change the website's MIT grant.
+text is shipped alongside it. These font licences do not change the website's GPL grant.

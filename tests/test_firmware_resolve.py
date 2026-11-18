@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Install/restore orchestration: cache/acquire/manual ZIP, restore planning, space budget."""
 import collections
 import hashlib

@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Static MIPS helpers, fixed production paths and no new dependencies.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)

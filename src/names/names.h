@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef DISKOS_NAMES_H
 #define DISKOS_NAMES_H
 #define _GNU_SOURCE

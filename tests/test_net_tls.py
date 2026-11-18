@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """TLS context, pinned CA bundle and exact-host URL allowlist. No network."""
 import hashlib
 import os

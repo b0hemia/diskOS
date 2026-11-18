@@ -28,8 +28,8 @@ struct aps_queue {
 };
 int aps_media_open(const char *root, const char *path){
     size_t n = root ? strlen(root) : 0;
-    if(!n || !path || strncmp(root, path, n) || path[n] != '/' || strlen(path + n + 1) >= 256) return -1;
-    char relative[256]; strcpy(relative, path + n + 1);
+    if(!n || !path || strncmp(root, path, n) || path[n] != '/' || strlen(path + n + 1) >= TRACK_PATH_MAX) return -1;
+    char relative[TRACK_PATH_MAX]; strcpy(relative, path + n + 1);
     /* The configured mount root is trusted. Every library-relative component
      * and the final inode are checked through directory descriptors. */
     int d = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC); if(d < 0) return -1;
@@ -178,14 +178,16 @@ static int worker_command(aps_queue *q, unsigned cmd, int idx){
 }
 static void *run(void *ctx){
     aps_queue *q = ctx; aps_message first = q->first;
+    const char *end_reason = "queue stopped", *failure = "allocation failed";
     if(!cancelled(q) && cast_queue_snapshot(&q->queue, q->mode, q->pos_id, first.view.path) == CQ_OK){
         uint64_t seed; if(aps_random(&seed, sizeof seed) || cast_cursor_open(&q->cursor, &q->queue, classify, q, seed)) cast_queue_free(&q->queue);
     }
     q->identity_generation = q->notified_generation = q->revision = 1; q->queue.generation = q->revision;
     if(q->queue.n){ q->removed = calloc((size_t)q->queue.n, 1); if(!q->removed) goto failed; }
     q->audible = q->queue.n ? q->queue.cur : -1;
+    failure = "initial submit failed";
     if(submit(q, &first, q->audible, 1)) goto failed;
-    view_publish(q);
+    view_publish(q); failure = "queue operation failed";
     for(;;){
         pthread_mutex_lock(&q->mutex);
         while(!atomic_load(&q->stop) && !q->count && !q->have_observed){
@@ -204,7 +206,7 @@ static void *run(void *ctx){
         if(have && observed.qgen == q->queue.generation && observed.occurrence && observed.occurrence <= (uint64_t)q->queue.n){
             q->audible = (int)observed.occurrence-1; q->cursor.pos = cast_cursor_pos_of(&q->cursor, q->audible); view_publish(q);
         }
-        if(cancelled(q)){ free(e.ids); break; }
+        if(cancelled(q)){ end_reason = atomic_load(&q->stop) ? "queue stopped" : "SD unavailable"; free(e.ids); break; }
         art_tick(q, have ? &observed : NULL);
         aps_message m = e.m;
         if(e.ids){
@@ -272,7 +274,7 @@ static void *run(void *ctx){
                         if(q->removed[idx]) continue;
                         int result = classify(q, idx, &duration);
                         if(result == CF_V_OK){ next = idx; break; }
-                        if(result != CF_V_EXCLUDED || (natural && mode == 2)) goto failed;
+                        if(result != CF_V_EXCLUDED || (natural && mode == 2)){ failure = "next classify failed"; goto failed; }
                         skipped++;
                     }
                 }
@@ -280,12 +282,20 @@ static void *run(void *ctx){
         }
         if(skipped){ aps_message notice = { .type = APS_NOTICE, .command = APS_QUEUE_SKIP, .position_ms = skipped }; (void)aps_ipc_send(q->ctl, q->attempt, &notice, -1); }
         m.position_ms = 0;
-        if(next < 0){ m.type = APS_ENDED; if(aps_ipc_send(q->ctl, q->attempt, &m, -1)) break; }
-        else if(submit(q, &m, next, 0)) goto failed;
+        if(next < 0){
+            m.type = APS_ENDED; int rc = aps_ipc_send(q->ctl, q->attempt, &m, -1);
+            fprintf(stderr, "AirPlay queue end reason=no next item post=%d\n", rc);
+            if(rc){ end_reason = "ENDED send failed"; break; }
+        }
+        else if(submit(q, &m, next, 0)){ failure = "next submit failed"; goto failed; }
     }
+    fprintf(stderr, "AirPlay queue exit reason=%s\n", end_reason);
     return NULL;
 failed:
-    { aps_message m = { .type = APS_FAILED, .error = APS_ERR_FORMAT }; (void)aps_ipc_send(q->ctl, q->attempt, &m, -1); }
+    { aps_message m = { .type = APS_FAILED, .error = APS_ERR_FORMAT };
+      int rc = aps_ipc_send(q->ctl, q->attempt, &m, -1);
+      fprintf(stderr, "AirPlay queue failure reason=%s error=%d post=%d\n",
+          atomic_load(&q->stop) ? "queue stopped" : !sd_io_allowed() ? "SD unavailable" : failure, m.error, rc); }
     return NULL;
 }
 aps_queue *aps_queue_start(int ctl, uint32_t attempt, const char *root, int mode, int pos_id, const aps_message *first){

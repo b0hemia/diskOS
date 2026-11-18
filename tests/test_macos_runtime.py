@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """macOS boundaries tested offline with injected commands; no USB or display."""
 import importlib.util
 from contextlib import ExitStack

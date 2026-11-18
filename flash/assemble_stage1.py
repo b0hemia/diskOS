@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Assemble the USB stage-1 from the GPL-built SPL + the W63AH6NKB DDR parameter block.
 
   stage1 = BDIF record + DDR record (35 W63AH6NKB reg words) + zero-pad to 0x800 + u-boot-spl.bin

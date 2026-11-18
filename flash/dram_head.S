@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (c) 2026 diskOS contributors */
 /* Entry stub of the DRAM NAND tools (my_write5/6): usbboot --start1 0xa0c00030 lands here. Saves the mask-ROM ra/sp
  * in TCSM scratch, switches to a private DRAM stack, calls the C entry (my_write at 0xa0c00060, see dram.ld), then

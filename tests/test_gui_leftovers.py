@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Slice 2a leftovers: other-actions list, tick checkbox, stale Remove text, restore firmware, wordmark packaging."""
 import os
 import sys

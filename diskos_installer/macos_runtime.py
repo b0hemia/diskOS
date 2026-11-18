@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """macOS native-tool preparation and power assertion. No system-wide changes."""
 import os
 from pathlib import Path

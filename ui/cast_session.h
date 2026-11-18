@@ -44,6 +44,7 @@ typedef struct {
     cm_app app;                          /* owned app (ids from the matching LAUNCH reply) once known */
     cm_volume volume;                    /* receiver level and mute, from receiver-0 RECEIVER_STATUS only; absent fields keep the last value */
     int media_id, player, idle, confirmed; /* owned mediaSessionId (0 = none); CS_PL_*, CS_IDLE_* (reason valid while IDLE); id of the last confirmed command */
+    int stopped;                        /* current occurrence stopped; media_id is a tombstone, only a new LOAD can play it */
     double media_time;                   /* last currentTime reported for the owned media session */
     char taken_by[CM_ID];                /* CS_TAKEN_OVER: displayName (else appId) of the replacing app, empty for a new media session */
     int load_state, load_error;          /* CS_JOB_*, and the CS_E_* code once FAILED; load_seq counts accepted cast_session_load() calls */
@@ -67,7 +68,7 @@ uint64_t cast_session_snapshot(cast_session *, cs_snapshot *out);
 int cast_session_submit(cast_session *, cs_op);  /* STATUS, PLAY, PAUSE */
 int cast_session_seek(cast_session *, double seconds);            /* finite, 0..INT32_MAX */
 int cast_session_volume(cast_session *, double level, int muted); /* receiver level 0..1 (<0 keeps) and mute 0/1 (-1 keeps) */
-int cast_session_volume_step(cast_session *, int direction); /* +/-1: two percentage points, resolved by worker */
+int cast_session_volume_step(cast_session *, int direction); /* +/-1: one percentage point, resolved by worker */
 int cast_session_track(cast_session *, const char *content_id);   /* expect media with this contentId; forgets the owned media session */
 /* LOAD of one track, always paused. RT_ARGUMENT unless READY and the request is valid (checked by encoding it, so the worker never
  * meets a request it cannot send). Hides the current media and sets load_state PENDING with a new load_seq. Failure restores

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (c) 2026 diskOS contributors */
 /* my_write6.c - diskOS rootfs writer WITH an installed-base gate (X2000 Disc, GD5F2GM7 SPI-NAND, mask-ROM DRAM tool).
  *
@@ -496,7 +496,7 @@ __attribute__((noinline)) static int write_block_verify(volatile u32 *dbg, u32 p
         if(pr) continue;
         pr = 0;
         for(k=0;k<64u && !pr;k++){
-            if(read_page(page+k, 0, rb, PAGE_SZ)!=0){ pr = 1; break; }
+            if(read_page_ecc(page+k, rb)<0){ pr = 1; break; }
             for(i=0;i<PAGE_SZ;i++){ if(rb[i] != src[k*PAGE_SZ+i]){ pr = 1; break; } }
         }
         if(!pr){ *tries_out = t+1u; return 0; }

@@ -62,7 +62,6 @@ static int pk_step(int vis, int ph, int wifi, uint32_t now){
         pthread_join(P.th, NULL); P.run = 0; P.t = now;
         P.st = P.rc == CD_FOUND ? PK_LIST : P.rc == CD_NONE || P.rc == CD_TIMEOUT ? PK_NONE : PK_FAIL;
     }
-    if(P.run && now - P.t >= PK_MS){ pk_stop(); P.st = PK_NONE; P.t = now; }
     return P.st;
 }
 /* A tap on row i of the list drawn at generation gen: 0 session requested, 1 list too old (searching again), -1 refused. */

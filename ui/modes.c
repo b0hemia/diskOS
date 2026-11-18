@@ -73,7 +73,7 @@ static const out_seq_t OUT_SEQ[3] = {
 static void modes_ui_refresh(void);
 static int g_out_route = OUT_INTERNAL;
 static unsigned g_out_gen = 0;
-static struct { int target, was_playing, full; unsigned gen; char path[256]; long pos; uint32_t t0, quiet0; lv_timer_t *tm; } g_osw;
+static struct { int target, was_playing, full; unsigned gen; char path[TRACK_PATH_MAX]; long pos; uint32_t t0, quiet0; lv_timer_t *tm; } g_osw;
 static int g_rec = 0; static unsigned g_rec_gen = 0; static lv_timer_t *g_rec_tm = NULL;
 
 static void out_set_state(int r){
@@ -121,6 +121,10 @@ static int out_pcm_probe(int require_closed){
 static int out_pcm_quiet(void){ return out_pcm_probe(0); }
 int modes_receiver_quiet(void){ return out_pcm_probe(1); }
 int modes_local_teardown(unsigned generation){ return ipc_send_automatic("0657000C0008", generation); }
+/* Beam interlock (not the receiver path: modes_local_teardown stays the one shared Local reselect). V2.57: with the player
+ * paused 0657000C0002 closes every playback PCM and the stock key 250 then does nothing (device-verified 2026-11-11). */
+int modes_beam_lock(unsigned generation){ return ipc_send_automatic("0657000C0002", generation); }
+int modes_beam_unlock(void){ return ipc_send_automatic("0657000C0008", ipc_generation()); }
 static int out_usb_card_ok(void){
     char p[96]; snprintf(p, sizeof p, "%s/usbid", OUT_USB_CARD);
     return access(p, F_OK) == 0;
@@ -395,7 +399,9 @@ void modes_create(lv_obj_t *root){
         lv_obj_t *nm = lv_label_create(row);
         lv_label_set_text(nm, tr(MODES[i].name));
         lv_obj_set_pos(nm, 16, subtitle ? 7 : 16);
-        lv_obj_set_width(nm, 218);
+        /* Both text lines end before the shared 40 px selection column. */
+        const int text_width = 260 - 16 - 40;
+        lv_obj_set_width(nm, text_width);
         lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_font(nm, TF(UI_16), 0);
         lv_obj_set_style_text_color(nm, TC(TEXT_PRIMARY), 0);
@@ -404,9 +410,10 @@ void modes_create(lv_obj_t *root){
         lv_label_set_text(sb, tr(MODES[i].sub));
         if(!subtitle) lv_obj_add_flag(sb, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(sb, 16, 25);
-        lv_obj_set_height(sb, 30);                      /* two lines keep the full receiver hint in the row */
-        lv_obj_set_width(sb, 228);
-        lv_label_set_long_mode(sb, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_line_space(sb, 0, 0);
+        lv_obj_set_height(sb, 2 * lv_font_get_line_height(TF(UI_12)));   /* two lines keep the full receiver hint in the row */
+        lv_obj_set_width(sb, text_width);
+        lv_label_set_long_mode(sb, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_font(sb, TF(UI_12), 0);
         lv_obj_set_style_text_color(sb, TC(TEXT_MUTED), 0);
 

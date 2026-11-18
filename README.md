@@ -15,13 +15,12 @@
 
 <p align="center">
   <a href="docs/INSTALL.md#host-support"><img alt="Linux, macOS, and Windows" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-3D424B?style=flat-square"></a>
-  <a href="LICENSE"><img alt="Installer MIT" src="https://img.shields.io/badge/installer-MIT-D77868?style=flat-square"></a>
-  <a href="ui/COPYING"><img alt="UI GPL 3.0 or later" src="https://img.shields.io/badge/UI-GPL--3.0--or--later-8EAF93?style=flat-square"></a>
+  <a href="LICENSE"><img alt="GPL 3.0 or later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-8EAF93?style=flat-square"></a>
   <a href="https://ko-fi.com/b0hemia"><img alt="Support diskOS on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support%20diskOS-FF5E5B?style=flat-square&logo=ko-fi&logoColor=white"></a>
 </p>
 
 <p align="center">
-  <a href="https://b0hemia.github.io/diskos/">Website</a> |
+  <a href="https://b0hemia.github.io/diskOS/">Website</a> |
   <a href="#see-diskos">Screenshots</a> |
   <a href="#before-you-install">Before you install</a> |
   <a href="#install">Install</a> |
@@ -38,7 +37,7 @@
 ## At a glance
 
 - **Device:** FiiO Snowsky Disc.
-- **Release described here:** diskOS and installer 1.2.2.
+- **Release described here:** diskOS and installer 1.2.3.
 - **Stock firmware supported:** V2.09, V2.28, V2.40, and V2.57. AirPlay receiving needs V2.40 or V2.57.
 - **Hosts:** Linux x86-64 (Debian, Ubuntu, Arch, CachyOS, Fedora); macOS Apple Silicon release package. Intel Macs can build the native tools. Windows 10/11 x64 release ZIP.
 - **Flash time:** about 20 minutes, including the firmware check and verification.
@@ -67,7 +66,10 @@
 
 - [Now Playing](docs/TOUR.md#now-playing) puts music controls on the round display.
 - Ogg Opus files (.opus, .oga, and .ogg) are indexed with tags and available lengths
-  and played through the stock player.
+  and played through the stock player. WAV files show their title, artist, album, genre and
+  track tags after a rescan.
+- Gurmukhi and Devanagari names are shaped correctly, and Urdu and Hebrew names read right
+  to left.
 - Home's now-playing border shows playback progress in the halo theme.
 - Beam plays the Disc's music on Cast and AirPlay speakers and TVs on your Wi-Fi, from the
   Beam button on Now Playing, the Options page or an optional Quick Settings tile.
@@ -77,6 +79,8 @@
 - [Up Next](docs/TOUR.md#up-next) shows the player's queue and lets you jump within it.
 - [Lyrics and Song Info](docs/TOUR.md#song-info-and-lyrics) show words and available file details.
 - [Library and cover flow](docs/TOUR.md#library) offer several ways to browse indexed music.
+  Artist, album artist and album sort tags set the order after a rescan, and featured artists
+  ("feat.", "ft.") get their own Artists entry.
 - [Playlists, favourites, and books](docs/TOUR.md#playlists) keep different listening collections close.
 - [Themes and display choices](docs/TOUR.md#eight-themes) change the look of the interface.
 
@@ -91,7 +95,7 @@
   animated GIF from the CustomCover folder on the SD card, with optional time, date, battery,
   now-playing and weather overlays.
 - [Network settings](docs/TOUR.md#settings-network) can rename the Disc and its Bluetooth name,
-  and give paired devices nicknames. The Disc's network name needs a full flash of 1.2.2.
+  and give paired devices nicknames. The Disc's network name needs a full flash of 1.2.2 or later.
 - Settings > Device > Automatic Update Checks (off by default) announces new releases; it never
   installs anything without your tap.
 - Swipe up from the bottom edge of the screen to go straight Home.
@@ -108,8 +112,8 @@ the macOS app and Windows release ZIP include their runtime and tools. The insta
 root filesystem image on your computer; this project does not distribute FiiO's root filesystem.
 Back up your music, keep a separate copy of the saved stock image, and read the [full requirements](docs/INSTALL.md#requirements).
 
-For 1.2.1 users, see [Update, restore, recover](#update-restore-recover) for the signed app
-update and changes that require a **full flash** with the complete 1.2.2 installer.
+For 1.2.2 users, see [Update, restore, recover](#update-restore-recover) for the signed 1.2.3 app
+update and changes that require a **full flash** with the complete 1.2.3 installer.
 The installer checks the selected firmware and the Disc before it writes.
 If it refuses a firmware archive, use a matching unmodified official ZIP.
 Read the on-screen message before retrying a failed flash.
@@ -159,7 +163,7 @@ options for your own build, and error codes. Do not run the installer with `sudo
 
 Use **Windows 10/11 x64**:
 
-1. Extract the complete **diskos-installer-windows-x86_64.zip** from the 1.2.2 release.
+1. Extract the complete **diskos-installer-windows-x86_64.zip** from the 1.2.3 release.
    Open **diskos-installer.exe**; keep `_internal`, **RECOVERY.txt**, and all files together.
    The program is not code-signed. Windows SmartScreen may show "Windows protected your PC"
    on first run; if it does, select **More info**, then **Run anyway**.
@@ -180,16 +184,17 @@ and [RECOVERY.txt](RECOVERY.txt) for errors and recovery.
 
 ## Update, restore, recover
 
-From 1.2.1, Settings > System > Update diskOS can install the signed 1.2.2 app update
-over Wi-Fi if updates are allowed. Fresh installs and older versions use the installer.
-It updates only the diskOS app, not stock firmware or the whole image, and does not change
-how old a saved app update the system image allows. A full flash with the complete 1.2.2
-installer starts the diskOS version inside that installer and clears downloaded diskOS updates;
-settings and music are kept. The network name hook, the per-flash identity and the boot-script
-update-retention fix also require a full flash;
-see the [release notes](docs/RELEASE_NOTES_1.2.2.md).
-The 1.2.2 release image includes the diskOS release key by default. Turn updates off
-on the Disc, or untick **Allow diskOS updates over Wi-Fi** when flashing. See [upgrading](docs/INSTALL.md#upgrading-to-122).
+1.2.2 users can install the signed 1.2.3 app update over Wi-Fi from Settings > Device >
+Update diskOS if updates are allowed. It includes the matching cover helper and delivers
+the 1.2.3 UI changes without a full flash. Fresh installs and older versions use the installer.
+App updates do not replace stock firmware, the boot script or the image's minimum update epoch.
+The boot-log correction and newer image minimum come with a full flash using the 1.2.3 installer.
+A full flash starts the included diskOS version and clears downloaded app updates; settings
+and music are kept. The network name hook, per-flash identity and boot-script update-retention
+fix introduced in 1.2.2 also require a full flash with 1.2.2 or later;
+see the [1.2.2 release notes](docs/RELEASE_NOTES_1.2.2.md).
+The 1.2.3 release image includes the diskOS release key by default. Turn updates off
+on the Disc, or untick **Allow diskOS updates over Wi-Fi** when flashing. See [upgrading](docs/INSTALL.md#upgrading-to-123).
 
 To use the stock interface without reflashing, set **Settings > Device > Default UI > Stock**.
 Holding **Volume Up** from power-on boots the other interface once: Stock when diskOS is the
@@ -218,13 +223,13 @@ Some mono FLAC, MP3, and Opus files can play slowed down in the stock player. No
 may still retain the old track after a mono Opus file advances into another mono Opus file.
 The stock player and connected headphones also affect some audio and Bluetooth choices.
 Browse Files plays ordinary indexed audio files through the all-songs queue rather than a folder queue. On V2.09,
-playlist and book playback may fail; on V2.57, the Custom EQ editor is view-only.
+playlist and book playback may fail; on V2.57, Custom EQ edits the ten-band USER presets, and
+advanced parametric presets stay view-only.
 Beam to Cast supports MP3, AAC, Opus, Ogg Vorbis, and 16- or 24-bit FLAC and PCM WAV up to 96
 kHz, in mono or stereo. Google Home Mini receivers accept FLAC up to 48 kHz. AirPlay decodes
 mono or stereo MP3, FLAC and PCM WAV at 8-384 kHz and converts AAC, ALAC, Opus, Ogg Vorbis, WMA,
 APE and DSD. Unsupported files, CUE tracks and audiobooks cannot be beamed. See the [Beam
-guide](docs/TOUR.md#beam) for controls and limits. Hebrew letters show, but right-to-left
-ordering is not corrected.
+guide](docs/TOUR.md#beam) for controls and limits.
 Read the [tour's limits](docs/TOUR.md#limits) and [privacy disclosure](docs/PRIVACY.md).
 This project is not affiliated with or endorsed by FiiO, Snowsky, or Ingenic.
 
@@ -249,11 +254,12 @@ Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 
 ## License and support
 
-The installer, scripts, and documentation are MIT licensed; see [LICENSE](LICENSE).
-The on-device UI source in [ui/](ui/) is GPL-3.0-or-later; see [ui/COPYING](ui/COPYING).
-The website HTML, CSS, JavaScript, and diskOS-owned screenshot images in [site/](site/)
-are MIT licensed under [LICENSE](LICENSE). This grant covers only rights held by diskOS
-contributors; third-party artwork and trademarks remain with their respective owners.
+diskOS is free software under the GNU GPL v3.0 or later; see [LICENSE](LICENSE). This covers the
+installer, scripts, documentation, the on-device UI in [ui/](ui/) and the website in [site/](site/).
+Third-party components keep their own licences (see [NOTICE.md](NOTICE.md)). Releases up to 1.2.2
+published the installer and tools under the MIT licence; see [NOTICE.md](NOTICE.md).
+The website grant covers only rights held by diskOS contributors; third-party artwork and
+trademarks remain with their respective owners.
 Website fonts retain their own licences; see [licenses/README.md](licenses/README.md#website-fonts).
 Third-party license details and corresponding source are listed in [NOTICE.md](NOTICE.md),
 [SPL_SOURCE.md](SPL_SOURCE.md), and [licenses/](licenses/).

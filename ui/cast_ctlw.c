@@ -16,7 +16,11 @@
 #include "cast_format.h"
 #include "sdio.h"
 
-typedef struct { cc_ev e; int play_mode, pos_id; char path[256]; uint32_t ep; } cw_ev;   /* ENTER fills play_mode / pos_id / path; the others only e. SELECT: e.ids is a malloc'd copy owned by the slot. ep: the epoch it was posted in */
+typedef struct {
+    cc_ev e, live;                              /* latest report; latest usable live report, with its original identity */
+    int have_live, replay_live;                  /* replay only when an unusable replacement follows the saved report */
+    int play_mode, pos_id; char path[TRACK_PATH_MAX]; uint32_t ep;
+} cw_ev;   /* ENTER fills play_mode / pos_id / path. SELECT: e.ids is a malloc'd copy owned by the slot. ep: the epoch it was posted in */
 struct cw {
     pthread_mutex_t mu; pthread_cond_t ev_cv, act_cv, idle_cv; pthread_t th;
     int closing, busy, force_local;
@@ -27,6 +31,7 @@ struct cw {
     unsigned coalesced, dropped, lost;
     uint32_t (*now)(void);
     cw_view view;                                /* 14f: the published view, under mu */
+    int dur_ms;                                  /* under mu: posted ENTER duration, then the worker's duration before each LOAD is exposed */
     cast_ctl c;                                  /* never moves: allocated with the worker */
 };
 
@@ -83,18 +88,31 @@ static void push(cw *w, const cc_act *a, const cc_row *row){
 static void emit(cw *w, const cc_act *o, int n){
     for(int i = 0; i < n; i++){ cc_row r; if(o[i].row) r = *o[i].row; else memset(&r, 0, sizeof r); push(w, &o[i], &r); }
 }
+static void apply(cw *w, const cc_ev *e){
+    cc_act o[CC_ACT_MAX]; int n = cast_ctl_step(&w->c, e, o);
+    for(int i = 0; i < n; i++) if(o[i].kind == CC_A_LOAD){
+        /* Only the worker reads the cursor. Publish its duration before any LOAD action can be taken. */
+        pthread_mutex_lock(&w->mu);
+        if(w->cur_ep == w->epoch) w->dur_ms = w->c.s[w->c.a].cur.dur_ms;
+        pthread_mutex_unlock(&w->mu);
+        break;
+    }
+    emit(w, o, n);
+}
 static void step(cw *w, cw_ev *x){
-    cc_act o[CC_ACT_MAX]; int n; cast_queue q;
+    cc_act o[CC_ACT_MAX]; cast_queue q;
     if(x->e.type == CC_EV_ENTER){
         memset(&q, 0, sizeof q);
         if(cast_queue_snapshot(&q, x->play_mode, x->pos_id, x->path) != CQ_OK){   /* no queue: the handoff's one track keeps playing, nothing more */
             memset(o, 0, sizeof o); o[0].kind = CC_A_TOAST; o[0].toast = CC_T_LIST_FAILED; emit(w, o, 1); return;
         }
         x->e.q = &q;
-        n = cast_ctl_step(&w->c, &x->e, o);
+        apply(w, &x->e);
         if(q.n) cast_queue_free(&q);               /* refused (already active): the snapshot was not taken over */
-    } else n = cast_ctl_step(&w->c, &x->e, o);
-    emit(w, o, n);
+    } else {
+        if(x->replay_live) apply(w, &x->live);     /* identity checks and adoption run before the latest state report */
+        apply(w, &x->e);
+    }
 }
 /* 14f: the view, built from the worker-owned controller after each step (so only the worker reads the cursor), copied under mu */
 static void publish(cw *w){
@@ -155,18 +173,34 @@ static int droppable(int t){ return t == CC_EV_SNAPSHOT || t == CC_EV_NEXT || t 
 static int post(cw *w, const cw_ev *in){
     cw_ev xv = *in; const cw_ev *x = &xv; int t = x->e.type, r = 0, nd = 0;
     pthread_mutex_lock(&w->mu);
-    if(w->closing || t <= CC_EV_NONE || t > CC_EV_JUMP){ pthread_mutex_unlock(&w->mu); return -1; }
+    if(w->closing || t <= CC_EV_NONE || t > CC_EV_PLAY){ pthread_mutex_unlock(&w->mu); return -1; }
     if(t == CC_EV_JUMP && (w->busy || w->en || w->force_local)){
         w->dropped++; pthread_mutex_unlock(&w->mu); return -1;
     }
     xv.ep = w->epoch;
-    if(t == CC_EV_LOCAL){ w->epoch++; w->an = 0; w->have_result = 0; pthread_cond_broadcast(&w->act_cv); }   /* 14e2 C2: LOCAL voids every queued and in-flight action of the cast it ends */
+    if(t == CC_EV_LOCAL){ w->epoch++; w->an = 0; w->have_result = 0; w->dur_ms = 0; pthread_cond_broadcast(&w->act_cv); }   /* 14e2 C2: LOCAL voids every queued and in-flight action of the cast it ends */
     if(t == CC_EV_LOAD_STARTED || t == CC_EV_LOAD_REFUSED){
         /* Results arrive in LOAD-action order from the single LVGL executor.
          * A newer result makes every older one stale, even across queue changes. */
         w->result = *x; w->have_result = 1; goto done;
     }
-    if(t == CC_EV_SNAPSHOT && w->en && w->ev[w->en - 1].e.type == CC_EV_SNAPSHOT){ w->ev[w->en - 1] = *x; w->coalesced++; r = 1; goto done; }
+    if(t == CC_EV_SNAPSHOT && cast_ctl_position_usable(&x->e, w->dur_ms)){
+        xv.live = x->e; xv.have_live = 1;
+    }
+    if(t == CC_EV_SNAPSHOT && w->en){
+        cw_ev *slot = &w->ev[w->en - 1]; const cc_ev *tail = &slot->e;
+        if(slot->ep == x->ep && tail->type == CC_EV_SNAPSHOT &&
+           tail->qgen == x->e.qgen &&
+           tail->media_id == x->e.media_id &&
+           tail->load_seq == x->e.load_seq &&
+           (tail->player == CS_PL_IDLE) == (x->e.player == CS_PL_IDLE)){
+            if(!xv.have_live && slot->have_live){
+                xv.live = slot->live; xv.have_live = xv.replay_live = 1;
+            }
+            *slot = *x;
+            w->coalesced++; r = 1; goto done;
+        }
+    }
     for(int i = 0; i < w->en; i++) nd += droppable(w->ev[i].e.type);
     if(droppable(t) ? (nd >= CW_EV_DROP || w->en == CW_EV_N) : w->en == CW_EV_N){
         int i = 0;
@@ -177,6 +211,7 @@ static int post(cw *w, const cw_ev *in){
         } else { w->dropped++; r = -1; goto done; }
     }
     w->ev[w->en++] = *x;
+    if(t == CC_EV_ENTER) w->dur_ms = x->e.dur_ms > 0 ? x->e.dur_ms : 0;
 done:
     pthread_cond_signal(&w->ev_cv); pthread_mutex_unlock(&w->mu);
     return r;

@@ -15,6 +15,7 @@
 #ifndef DISKOS_POWER_H
 #define DISKOS_POWER_H
 #include <stddef.h>
+#include <limits.h>
 #include <stdint.h>
 
 /* ---- option tables and frames (pure) ---- */
@@ -33,14 +34,33 @@ const char *power_temp_msg(int state);
 
 /* Charging, one rule for every consumer (Home bolt, the idle power-off hold, the "Idle & Charging" art prewarm).
  * report: the stock player's own charging report (aa1f, ipc.h) in this player generation: -1 none yet, 0, 1.
- * current_now: the gauge's current_now (-1 = unreadable), which reads 0 at full charge and at the Charging Limit.
+ * current_now: the gauge's current_now (POWER_CURRENT_UNREADABLE = no reading), which reads 0 at full charge and at the
+ * Charging Limit. A negative reading is a reading (not charging); whether this gauge ever reports one is UNVERIFIED.
  * The report wins once one has arrived; before that the old rule current_now > 0. Returns 1 charging, 0 not charging,
  * -1 unknown (no report and no reading). The report is one bit: 0 also means "cable in, battery full or held at the
  * Charging Limit", which it cannot tell apart from "no cable". */
+#define POWER_CURRENT_UNREADABLE LONG_MIN
 int  power_charging_decide(int report, long current_now);
 
 /* SYSCONFIG.POWER_SAVE / CHARGE_PROTECT, read-only: value, or -1 when unreadable (missing, locked, NULL). */
 int  power_read_sysconfig(const char *db_path, const char *column);
+
+/* Battery policy: 2 percentage points of charging hysteresis (12/7 to rearm 10/5).
+ * Unknown/out-of-range samples cancel empty countdowns; never infer empty from a read failure.
+ * A zero sample is fresh for 6 s (two normal 3 s polls). Timestamps use unsigned wrap arithmetic. */
+enum { PW_BAT_LOW10 = 1, PW_BAT_LOW5 = 2, PW_BAT_FULL = 4 };
+typedef struct {
+    unsigned warned;
+    int full, charging_seen, counting, fired;
+    uint32_t started, sampled;
+} pw_battery_t;
+int power_battery_sample(pw_battery_t *s, uint32_t now, int capacity, int charging);
+int power_battery_seconds(const pw_battery_t *s, uint32_t now);
+int power_battery_due(pw_battery_t *s, uint32_t now, int turn_off_now);
+/* Shutdown veto only: positive fresh current cancels; POWER_CURRENT_UNREADABLE is unknown (-1); zero or negative
+ * (discharging) falls back to state.
+ * The charging icon continues to use power_charging_decide(). */
+int power_battery_charging_decide(int state, long current_now);
 
 /* ---- idle power-off, run by diskOS (never by the player) ---- */
 /* Idle = not playing AND no touch/key input for limit_secs. Call often. Returns 1 exactly once per idle period, when the
@@ -85,14 +105,25 @@ typedef struct power_ops {
     uint32_t (*now_ms)(void *ctx);
     void     (*toast)(void *ctx, const char *msg);
     void     *ctx;
+    void     (*end_beams)(void *ctx);            /* optional (NULL ok), after ctx: end a Cast / AirPlay session cleanly */
+    void     (*failed)(void *ctx);               /* optional (NULL ok): a keep_closed (battery) shutdown failed closed */
 } power_ops_t;
 #define POWER_DRAIN_MS   8000u    /* writers get this long to finish */
 #define POWER_SYNC_MS   15000u
 #define POWER_CANCEL_RETRY_MS 2000u
+#define POWER_ANNOUNCE_DRAIN_MS 1500u   /* player-announced power-off: the player kills us ~3 s after the frame, so drain gets this long, then sync runs anyway */
 #define POWER_HANDOFF_MS 20000u   /* after the player is told to power off, this long before we call it failed */
 int  power_shutdown_begin(const power_ops_t *ops);   /* 0 started, -1 already running or ops incomplete */
 pw_phase_t power_shutdown_tick(void);                /* call often; PW_OFF when idle or finished-with-failure */
 pw_phase_t power_shutdown_phase(void);
+/* The player announced its own power-off or reboot (aa03 value 0000; see ipc.c) in player generation `gen`. It then runs sleep 3,
+ * killall -9 mq_ui, poweroff -f with no sync of its own and cannot be cancelled, so this uses the warning to close the card:
+ * the same sequence as above (admission closed first, then drain, then `sync`), minus the 0806 hand-off (the player is already
+ * powering off) and minus any reopening of the card or cancel when a step fails (nothing is unmounted or deleted; a failure
+ * leaves the card CLOSED, PW_PROTECTED, until the player restarts). Acts once per `gen`; later calls for the same gen return 0.
+ * If a shutdown is already running (sleep timer, idle, Shut down) it is joined, not restarted: it only loses its
+ * reopen/cancel-on-failure behaviour. Returns 1 when it started the sequence, 0 otherwise, -1 when ops are incomplete. */
+int  power_shutdown_announced(const power_ops_t *ops, unsigned gen);
 void power_shutdown_new_generation(void);            /* the player restarted (new ipc generation): clears PW_PROTECTED, reopens the card */
 
 #ifndef POWER_CORE_ONLY
@@ -103,9 +134,19 @@ int  power_apply_charge(int on);
  * reading, *report the report state, for logging. */
 int  power_charging(long *current_now, int *report);
 int  power_shutdown_request(void);
+/* UI thread, using the existing 3 s status poll; these run during playback and screen-off too. */
+int power_battery_capacity(void);   /* percent, -1 when missing/malformed/out of range */
+void power_battery_observe(int capacity, int charging);
+void power_battery_tick(void);
+int power_battery_shutdown_with(const power_ops_t *o, int screen_lit);
 /* power_shutdown_request with the ops and the panel state given (the host tests drive it with fakes): power_shutdown_begin, then
  * the closing animation only when it returned 0. */
 int  power_shutdown_request_with(const power_ops_t *o, int screen_lit);
+/* Main loop, every pass: when the player has announced a power-off (ipc_poweroff_announced), run power_shutdown_announced once
+ * per player generation with the real SD quiesce, `sync` child and beam end. Never a prompt (aa03 value 0002). */
+void power_poll_player_poweroff(void);
+int  power_shutdown_announced_with(const power_ops_t *o, int screen_lit, unsigned gen);   /* + the closing animation when it started */
+uint32_t power_next_deadline(void);
 void power_tick(uint32_t last_input_ms, int playing);   /* main loop: shutdown state machine, idle timer, temperature notice */
 void power_note_input(void);    /* a physical key was pressed (volume) */
 int  power_supported(void);     /* the stock backends above are mapped for this firmware (V2.57) */

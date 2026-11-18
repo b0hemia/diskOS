@@ -53,6 +53,19 @@ typedef enum {
     LV_LABEL_LONG_CLIP,             /**< Keep the size and clip the text out of it*/
 } lv_label_long_mode_t;
 
+/* Optional application layout. The label owns source text and animation offsets.
+ * Preparation runs during refresh/self sizing; draw must use prepared resources. */
+typedef struct {
+    bool (*measure)(lv_obj_t *, lv_point_t *, int32_t, lv_text_flag_t, bool);
+    bool (*draw)(lv_obj_t *, lv_layer_t *, const lv_draw_label_dsc_t *, const lv_area_t *);
+    void (*destroy)(lv_obj_t *);
+    bool (*accept)(const char *);
+    bool (*direction_rtl)(lv_obj_t *);
+} lv_label_layout_provider_t;
+void lv_label_set_layout_provider(lv_obj_t *obj, const lv_label_layout_provider_t *provider);
+uintptr_t lv_label_get_layout_handle(lv_obj_t *obj);
+void lv_label_set_layout_handle(lv_obj_t *obj, uintptr_t handle);
+
 #if LV_USE_OBJ_PROPERTY
 enum {
     LV_PROPERTY_ID(LABEL, TEXT,                   LV_PROPERTY_TYPE_TEXT,      0),

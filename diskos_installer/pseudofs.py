@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Validated squashfs-tools 4.6.1 export adapter; not a general pseudo interpreter.
 
 Kept opt-in until the image builder's shared edit and validation layer is ready.

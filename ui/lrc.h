@@ -100,6 +100,7 @@ static int lrc_parse(const char *src, lrc_line_t *lines, int maxl, char *text, i
         if(lrc_offset_tag(q, &v, &l)){ offset = v; break; }
     }
     const char *s = src;
+    if(strncmp(s, "\xEF\xBB\xBF", 3) == 0) s += 3;
     while(*s){
         const char *e = s;
         while(*e && *e != '\n') e++;

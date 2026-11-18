@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -23,14 +24,15 @@ int aps_ipc_send(int sock, uint32_t attempt, aps_message *b, int fd){
     ssize_t n; do { n = sendmsg(sock, &m, MSG_NOSIGNAL | MSG_DONTWAIT); } while(n < 0 && errno == EINTR);
     return n == sizeof *b ? 0 : -1;
 }
-int aps_ipc_receive(int sock, uint32_t attempt, aps_message *b, int *fd){
+int aps_ipc_receive_reason(int sock, uint32_t attempt, aps_message *b, int *fd, const char **reason){
+    *reason = "IPC invalid message";
     union { struct cmsghdr h; uint8_t bytes[CMSG_SPACE(16 * sizeof(int))]; } control;
     struct iovec v = { b, sizeof *b }; struct msghdr m = { .msg_iov = &v, .msg_iovlen = 1,
         .msg_control = control.bytes, .msg_controllen = sizeof control.bytes };
     *fd = -1;
     ssize_t n; do { n = recvmsg(sock, &m, MSG_DONTWAIT | MSG_CMSG_CLOEXEC); } while(n < 0 && errno == EINTR);
     if(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
-    if(n <= 0) return -1;
+    if(n <= 0){ *reason = n == 0 ? "IPC EOF" : "IPC receive failed"; return -1; }
     int count = 0, valid = !(m.msg_flags & (MSG_TRUNC | MSG_CTRUNC));
     for(struct cmsghdr *c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c)){
         if(c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS || c->cmsg_len < CMSG_LEN(0)){ valid = 0; continue; }
@@ -45,9 +47,13 @@ int aps_ipc_receive(int sock, uint32_t attempt, aps_message *b, int *fd){
     if(!valid || b->attempt != attempt){ if(*fd >= 0) close(*fd); *fd = -1; return valid ? 0 : -1; }
     b->pin[8] = 0; b->target.id[127] = 0; b->target.name[63] = 0; b->target.addr[15] = 0;
     b->view.title[PB_TEXT_MAX - 1] = 0; b->view.artist[159] = 0; b->view.album[159] = 0;
-    b->view.path[PB_TEXT_MAX - 1] = 0; b->view.dest[47] = 0;
+    b->view.path[sizeof b->view.path - 1] = 0; b->view.dest[47] = 0;
     return 1;
 }
+int aps_ipc_receive(int sock, uint32_t attempt, aps_message *b, int *fd){
+    const char *reason; return aps_ipc_receive_reason(sock, attempt, b, fd, &reason);
+}
+static int dispatch_rejected(void){ fprintf(stderr, "AirPlay worker end reason=dispatch rejected\n"); return 1; }
 int aps_worker_dispatch(int argc, char **argv, int *status){
     const char *name = argc > 0 && argv[0] ? strrchr(argv[0], '/') : NULL;
     name = name ? name + 1 : argc > 0 && argv[0] ? argv[0] : "";
@@ -56,14 +62,14 @@ int aps_worker_dispatch(int argc, char **argv, int *status){
     if(!worker) return 0;
     *status = 125;
     if(argc != 6 || strcmp(name, APS_WORKER_NAME) || strcmp(argv[1], APS_WORKER_MARKER) ||
-       strcmp(argv[2], "--ctl") || strcmp(argv[3], "3") || strcmp(argv[4], "--attempt")) return 1;
+       strcmp(argv[2], "--ctl") || strcmp(argv[3], "3") || strcmp(argv[4], "--attempt")) return dispatch_rejected();
     uint32_t attempt = 0; const char *p = argv[5];
-    if(!p || !*p) return 1;
+    if(!p || !*p) return dispatch_rejected();
     for(; *p; p++){
-        if(*p < '0' || *p > '9' || attempt > (UINT32_MAX - (unsigned)(*p - '0')) / 10) return 1;
+        if(*p < '0' || *p > '9' || attempt > (UINT32_MAX - (unsigned)(*p - '0')) / 10) return dispatch_rejected();
         attempt = attempt * 10 + (unsigned)(*p - '0');
     }
     int type = 0; socklen_t n = sizeof type;
-    if(!attempt || getsockopt(3, SOL_SOCKET, SO_TYPE, &type, &n) || type != SOCK_SEQPACKET) return 1;
+    if(!attempt || getsockopt(3, SOL_SOCKET, SO_TYPE, &type, &n) || type != SOCK_SEQPACKET) return dispatch_rejected();
     *status = aps_worker_main(3, attempt); return 1;
 }

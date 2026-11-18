@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Display assets and drawn controls of the installer window: titles/kickers come from the pre-rendered sheet
 with a text fallback, the hero disc hides with the hero, Dev lives under Advanced without changing behaviour,
 and every asset loads at both scales. Display tests skip without Tk/display."""

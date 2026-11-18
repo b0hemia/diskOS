@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Whole-package pins and crash-safe owned cache."""
 import contextlib
 import hashlib

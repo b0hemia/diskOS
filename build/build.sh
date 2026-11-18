@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # build.sh - produce the standalone `diskos-installer` executable for THIS host
 # (Linux or macOS). PyInstaller can't cross-build, so run this on each target OS.
 #

@@ -1,6 +1,14 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 /* theme_kits.c - each unique theme's component kit (theme_kit.h): its styler and the builders it replaces. */
+#include "indic.h"
+#include "rowpool.h"
+/* Theme-only harnesses have no data lists. */
+#pragma weak row_pool_model
+#pragma weak row_pool_slot
+#pragma weak row_slot_index
+#pragma weak row_pool_phase
+#pragma weak row_pool_number
 #include "theme.h"
 #include "theme_kit.h"
 #include "ui_dialog.h"
@@ -201,7 +209,7 @@ static void rx_show(lv_obj_t *o, int on){
 static void rx_wrap(lv_obj_t *l, int wrap){
     lv_label_long_mode_t m = wrap ? LV_LABEL_LONG_WRAP : LV_LABEL_LONG_DOT;
     int32_t h = wrap ? LV_SIZE_CONTENT :
-        lv_font_get_line_height(lv_obj_get_style_text_font(l, 0)) +
+        indic_line_height(lv_label_get_text(l),lv_obj_get_style_text_font(l, 0)) +
         lv_obj_get_style_pad_top(l, 0) +
         lv_obj_get_style_pad_bottom(l, 0);
     if(lv_obj_get_style_height(l, 0) != h) lv_obj_set_height(l, h);
@@ -679,13 +687,13 @@ static void term_cursor_place(lv_obj_t *title){
     const char *text = lv_label_get_text(title), *last = strrchr(text, '\n');
     int lines = 0; for(const char *p = text; *p; p++) if(*p == '\n') lines++;
     lv_point_t sz;
-    lv_text_get_size(&sz, last ? last + 1 : text, f, lv_obj_get_style_text_letter_space(title, 0),
+    if(!indic_label_cached_size(title, &sz, 1)) lv_text_get_size(&sz, last ? last + 1 : text, f, lv_obj_get_style_text_letter_space(title, 0),
                      0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
     int room = lv_obj_get_content_width(title);
     if(sz.x > room) sz.x = room;
     int x = lv_obj_get_x(title) + (room + sz.x) / 2 + 3;
     if(x > 318) x = 318;
-    int lh = lv_font_get_line_height(f);
+    int lh = indic_line_height_cached(title);
     lv_obj_set_pos(cur, x, lv_obj_get_y(title) + lv_obj_get_style_pad_top(title, 0) +
                    lines * (lh + lv_obj_get_style_text_line_space(title, 0)) + (lh - 16) / 2);
 }
@@ -1277,9 +1285,10 @@ static void blue_renumber(lv_obj_t *par){
     uint32_t cnt = lv_obj_get_child_count(par);
     int rows = 0, two_line = 0;
     /* a playlist streams its rows in: its shape and numbers come from the whole playlist, not the rows built yet */
-    int streamed = par == playlistview_scroller();
+    int pooled = row_pool_model && row_pool_model(par, &rows, &two_line);
+    int streamed = !pooled && par == playlistview_scroller();
     if(streamed) playlistview_row_pos(NULL, &rows, &two_line);
-    else for(uint32_t j = 0; j < cnt; j++){
+    else if(!pooled) for(uint32_t j = 0; j < cnt; j++){
         lv_obj_t *row = lv_obj_get_child(par, (int32_t)j);
         if(!blue_is_row(row)) continue;
         rows++;
@@ -1310,7 +1319,7 @@ static void blue_renumber(lv_obj_t *par){
             lv_obj_align(num, LV_ALIGN_LEFT_MID, 8, 0);
             lv_obj_add_flag(num, LV_OBJ_FLAG_USER_4);             /* already styled: the pass leaves it as drawn here */
         }
-        char b[8]; lv_snprintf(b, sizeof b, "%02d", streamed ? playlistview_row_pos(row, NULL, NULL) : n);
+        char b[8]; lv_snprintf(b, sizeof b, "%02d", pooled && row_pool_slot(row) ? row_pool_number(row) : streamed ? playlistview_row_pos(row, NULL, NULL) : n);
         if(strcmp(lv_label_get_text(num), b)) lv_label_set_text(num, b);
     }
 }
@@ -2196,7 +2205,7 @@ static lv_obj_t *bauh_shape(lv_obj_t *parent, int x, int y, int w, int h, int ki
 static void bauh_row_press(lv_event_t *e){
     lv_obj_t *row = lv_event_get_target(e);
     lv_obj_t *mark = lv_obj_get_child(row, lv_obj_get_child_count(row) - 1);
-    int kind = lv_obj_get_index(row) % 3;
+    int kind = (row_pool_phase ? row_pool_phase(row) : lv_obj_get_index(row)) % 3;
     lv_color_t color = kind == 0 ? TC(ACCENT_PRIMARY) : kind == 1 ? TC(DECOR_2) : TC(DECOR_1);
     lv_obj_set_style_bg_color(mark, lv_event_get_code(e) == LV_EVENT_PRESSED ? TC(DOT_GRID) : color, 0);
     lv_obj_invalidate(mark);
@@ -2236,7 +2245,7 @@ static void bauh_row_decor(lv_obj_t *row, lv_obj_t *title){
             }
         }
     }
-    int kind = lv_obj_get_index(row) % 3;
+    int kind = (row_pool_phase ? row_pool_phase(row) : lv_obj_get_index(row)) % 3;
     lv_color_t c = kind == 0 ? TC(ACCENT_PRIMARY) : kind == 1 ? TC(DECOR_2) : TC(DECOR_1);
     lv_obj_t *mark = bauh_shape(row, 8, 0, 8, 8, kind, c);
     lv_obj_align(mark, LV_ALIGN_LEFT_MID, 8, 0);
@@ -2490,11 +2499,11 @@ static void bauh_rx(const rx_parts_t *p, rx_state_t *s){
     rx_place(p->text[0], LV_ALIGN_TOP_LEFT, 194, 34, 120, NULL);
     if(wait) rx_place(p->text[1], LV_ALIGN_TOP_LEFT, 194, 70, 120, tf);
     else rx_place(p->text[1], LV_ALIGN_BOTTOM_LEFT, 194, -238, 120, tf);   /* the title stands on the artist, one or two lines */
-    int lh = lv_font_get_line_height(tf), cap = wait ? LV_COORD_MAX : 2 * lh;
+    int lh = indic_line_height(s->text[1],tf), cap = wait ? LV_COORD_MAX : 2 * lh;
     if(lv_obj_get_style_max_height(p->text[1], 0) != cap) lv_obj_set_style_max_height(p->text[1], cap, 0);
     if(wait) rx_wrap(p->text[1], 1);
     else{   /* one line or two, then an ellipsis; the box is exactly that tall (ui.c leaves a capped label alone) */
-        lv_point_t sz; lv_text_get_size(&sz, s->text[1], tf, 0, 0, 120, LV_TEXT_FLAG_NONE);
+        lv_point_t sz; indic_text_get_size(&sz, s->text[1], tf, 0, 0, 120, LV_TEXT_FLAG_NONE);
         int h = sz.y > lh ? cap : lh;
         if(lv_label_get_long_mode(p->text[1]) != LV_LABEL_LONG_DOT) lv_label_set_long_mode(p->text[1], LV_LABEL_LONG_DOT);
         if(lv_obj_get_style_height(p->text[1], 0) != h) lv_obj_set_height(p->text[1], h);
@@ -2602,7 +2611,7 @@ static void zine_title_draw(lv_event_t *e){
     if(lv_obj_get_user_data(o) != (void *)&theme_title_tag && lv_obj_get_y(o) >= 100) return;
     lv_area_t a; lv_obj_get_coords(o, &a);
     lv_point_t text;
-    lv_text_get_size(&text, lv_label_get_text(o), lv_obj_get_style_text_font(o, 0),
+    if(!indic_label_cached_size(o, &text, 0)) lv_text_get_size(&text, lv_label_get_text(o), lv_obj_get_style_text_font(o, 0),
                      lv_obj_get_style_text_letter_space(o, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
     int w = text.x + 18;
     if(w > a.x2 - a.x1 - 2) w = a.x2 - a.x1 - 2;
@@ -2643,7 +2652,7 @@ static void zine_row_draw(lv_event_t *e){
     if(!title || !lv_obj_has_state(row, LV_STATE_PRESSED) || lv_obj_has_flag(row, LV_OBJ_FLAG_USER_1)) return;
     lv_area_t a, t; lv_obj_get_coords(row, &a); lv_obj_get_coords(title, &t);
     lv_point_t text;
-    lv_text_get_size(&text, lv_label_get_text(title), lv_obj_get_style_text_font(title, 0),
+    if(!indic_label_cached_size(title, &text, 0)) lv_text_get_size(&text, lv_label_get_text(title), lv_obj_get_style_text_font(title, 0),
                      lv_obj_get_style_text_letter_space(title, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
     int x1 = t.x1 + 2, x2 = x1 + (text.x < 116 ? text.x : 116);
     if(x2 > a.x2 - 16) x2 = a.x2 - 16;
@@ -3305,3 +3314,8 @@ static void some_rx(const rx_parts_t *p, rx_state_t *s){
 const theme_kit_t theme_kit_something = { .id = "something", .style = some_style, .nowplaying = some_np, .receiver = some_rx,
                                           .empty_state = some_empty, .np_cover_state = some_cover,
                                           .saver = some_saver, .saver_clock = some_saver_clock };
+
+void kit_row_decor_reset(lv_obj_t *row){
+    while(lv_obj_remove_event_cb(row, blue_row_draw)) {}
+    while(lv_obj_remove_event_cb(row, bauh_row_press)) {}
+}

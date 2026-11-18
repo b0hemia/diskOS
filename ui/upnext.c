@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
+#include "indic.h"
 #include "screens.h"
 #include "theme.h"
 #include "theme_kit.h"
@@ -32,7 +33,7 @@ static lv_timer_t *g_un_fill, *g_un_watch;
 static mdb_qrow_t  g_un_rows[UN_SHOW + 1];
 static int         g_un_n, g_un_fill_i, g_un_more, g_un_retries, g_un_retry;   /* g_un_retry: last read was transient */
 static int         g_un_mode = -1;     /* the play mode the list was read in */
-static char        g_un_path[256];     /* the song that was current when the list was read */
+static char        g_un_path[TRACK_PATH_MAX];     /* the song that was current when the list was read */
 static int         g_un_pos;           /* its pos_id then (0 = unknown) */
 static unsigned    g_un_seq;           /* its path_seq then: a track change since means the list is stale */
 /* Cast (slice 14f): while playback_source() is CAST the list is the Cast queue in PLAY order, read from the worker's published view (a copy;
@@ -50,7 +51,7 @@ static void un_fmt_dur(int ms, char *out, size_t n){
 }
 
 static lv_obj_t *un_note(const char *msg){
-    lv_obj_t *l = lv_label_create(g_un_list);
+    lv_obj_t *l = indic_label_create(g_un_list);
     lv_label_set_text(l, msg);
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(l, 260);
@@ -90,7 +91,11 @@ static void un_update_title(const track_state_t *st){
     if(st->have_track && st->path_seq == g_un_seq && st->pos_id == g_un_pos &&
        !strcmp(st->path, g_un_path) && !strcmp(st->path, g_un_rows[0].path))
         text = st->title_ready ? (st->title[0] ? st->title : "Untitled") : "";
-    if(strcmp(lv_label_get_text(g_un_title), text)) lv_label_set_text(g_un_title, text);
+    if(strcmp(lv_label_get_text(g_un_title), text)) {
+        lv_label_set_text(g_un_title, text);
+        lv_obj_t *row = lv_obj_get_parent(g_un_title);
+        if(lv_obj_get_child_count(row) >= 2) indic_row_fit(row, g_un_title, lv_obj_get_child(row, 1));
+    }
 }
 
 static lv_obj_t *g_un_edit;
@@ -111,7 +116,7 @@ static void un_edit_open(lv_event_t *e){
     lv_obj_set_size(g_un_edit, 360, 360); lv_obj_remove_flag(g_un_edit, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(g_un_edit, TC(CANVAS), 0); lv_obj_set_style_bg_opa(g_un_edit, LV_OPA_COVER, 0);
     ui_on(g_un_edit, un_edit_deleted, LV_EVENT_DELETE, NULL, "upnext.edit.deleted", UI_CORE);
-    lv_obj_t *title = lv_label_create(g_un_edit); lv_label_set_text(title, g_un_rows[i].title);
+    lv_obj_t *title = indic_label_create(g_un_edit); lv_label_set_text(title, g_un_rows[i].title);
     lv_obj_set_pos(title, 65, 75); lv_obj_set_size(title, 230, 40); lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(title, TF(USER_16), 0); lv_obj_set_style_text_color(title, TC(TEXT_PRIMARY), 0);
     lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
@@ -122,7 +127,7 @@ static void un_edit_open(lv_event_t *e){
         lv_obj_set_pos(button, 58, 135+(int)k*52); lv_obj_set_size(button, 244, 44);
         lv_obj_set_style_radius(button, 12, 0); lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(button, TC(SURFACE_RAISED), 0); lv_obj_set_style_bg_color(button, TC(RAISED_PRESSED), LV_STATE_PRESSED);
-        lv_obj_t *label = lv_label_create(button); lv_label_set_text(label, labels[k]); lv_obj_center(label);
+        lv_obj_t *label = indic_label_create(button); lv_label_set_text(label, labels[k]); lv_obj_center(label);
         lv_obj_set_style_text_font(label, TF(UI_14), 0); lv_obj_set_style_text_color(label, TC(TEXT_PRIMARY), 0);
         ui_on(button, un_edit_choose, LV_EVENT_CLICKED, (void *)(uintptr_t)operations[k], "upnext.edit.choose", UI_CORE);
     }
@@ -164,7 +169,7 @@ static void un_add_row(int i){
     ui_on(r, un_edit_open, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i, "upnext.edit", UI_CORE);
     ui_on(r, un_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i, "upnext.un_row", UI_CORE);
 
-    lv_obj_t *t = lv_label_create(r);                           /* title (may be non-Latin) */
+    lv_obj_t *t = indic_label_create(r);                           /* title (may be non-Latin) */
     if(cur && !g_un_cast){
         g_un_title = t;
         track_state_t st; ipc_get_state(&st); un_update_title(&st);
@@ -174,7 +179,7 @@ static void un_add_row(int i){
     lv_obj_set_style_text_font(t, TF(USER_16), 0);
     lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
 
-    lv_obj_t *s = lv_label_create(r);                           /* artist; "Now Playing" on the current row */
+    lv_obj_t *s = indic_label_create(r);                           /* artist; "Now Playing" on the current row */
     const char *subtitle = cur ? "Now Playing" : q->artist;
     if(g_un_cast && playback_source() == PB_SRC_AIRPLAY){
         if(audio_stock_unavailable_label(q->path)) subtitle = audio_stock_unavailable_label(q->path);
@@ -187,9 +192,10 @@ static void un_add_row(int i){
     lv_obj_set_style_text_font(s, cur ? TF(UI_14) : TF(USER_14), 0);
     lv_obj_set_style_text_color(s, cur ? TC(ACCENT_PRIMARY) : TC(TEXT_MUTED), 0);
 
+    indic_row_fit(r, t, s);
     char dur[12]; un_fmt_dur(q->dur_ms, dur, sizeof dur);
     if(dur[0]){
-        lv_obj_t *d = lv_label_create(r);                       /* length, right-aligned */
+        lv_obj_t *d = indic_label_create(r);                       /* length, right-aligned */
         lv_label_set_text(d, dur);
         lv_obj_set_pos(d, 202, 17); lv_obj_set_size(d, 54, 18);
         lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_RIGHT, 0);
@@ -324,3 +330,10 @@ void upnext_refresh(void){
 }
 
 void upnext_open(void){ screen_show(SCR_UPNEXT); }
+
+/* Cosmetic row construction waits in darkness; queue/scan ownership is unchanged. */
+void upnext_fill_sync(int lit){
+    if(!g_un_fill)return;
+    if(!lit || screen_current()!=SCR_UPNEXT)lv_timer_pause(g_un_fill);
+    else if(lv_timer_get_paused(g_un_fill)){lv_timer_ready(g_un_fill);lv_timer_resume(g_un_fill);}
+}

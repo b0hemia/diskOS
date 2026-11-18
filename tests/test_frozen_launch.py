@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Private child authorization and Win32 supervision; no USB operations."""
 import ctypes
 from contextlib import ExitStack

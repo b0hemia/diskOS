@@ -1,3 +1,4 @@
+#include "indic.h"
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
@@ -5,6 +6,7 @@
 #include "sdio.h"
 #include "musicdb.h"
 #include "artcache.h"
+#include "art.h"
 #include "config.h"
 #include <stdio.h>
 #include <string.h>
@@ -48,6 +50,7 @@ static int     g_names_cap = 0;   /* allocated entries in the three album buffer
 static int     g_aw_inited = 0;   /* one-time blank-sprite + LRU init done */
 static int     g_nalb;
 static int     g_cur;
+static char    g_selected[MDB_STR];
 static float    g_off;                /* strip offset during a step animation (0 at rest) */
 static int      g_animating;
 static uint32_t g_tickctr;
@@ -126,15 +129,21 @@ static pthread_mutex_t g_wmu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_wcv = PTHREAD_COND_INITIALIZER;
 static unsigned g_wgen, g_wac_gen;              /* g_wac_gen: artcache_gen() when the request was made */
 static int g_wstarted, g_wbusy, g_wwant, g_wready, g_widx;
-static char g_wpaths[6][512];
+static char g_wpaths[6][TRACK_PATH_MAX];
 static int g_wn;
 static sprite_t g_wres;
 static unsigned g_wres_gen, g_wres_ac_gen;
+static uint64_t g_wlibrary,g_wmedia,g_wres_library,g_wres_media;
+/* Cover Flow pins as whole-path keys (artcache_pin_key), not path copies: 96 x TRACK_PATH_MAX would be 96 KiB of BSS.
+ * A key collision only protects one extra picture; a cut path copy could never match the full database path. */
+static uint64_t g_wall_pins[96];
+static unsigned g_wall_pin_next;
 
 static void aw_pixels_free(sprite_t *sp){
     free(sp->fbuf); free(sp->sbuf); sp->fbuf = sp->sbuf = NULL;
 }
 static void aw_cancel(void){
+    art_spec_cancel();
     pthread_mutex_lock(&g_wmu);
     g_wgen++;
     if(g_wwant) g_wbusy = 0;
@@ -145,24 +154,39 @@ static void aw_cancel(void){
 static void *aw_worker(void *arg){
     (void)arg;
     for(;;){
-        char paths[6][512]; int n, idx; unsigned gen, ac_gen;
+        int n, idx; unsigned gen, ac_gen; uint64_t library,media;
+        /* heap, not this worker's stack: 6 x TRACK_PATH_MAX; on failure the request publishes "no cover" (n = 0) */
+        char (*paths)[TRACK_PATH_MAX];
         pthread_mutex_lock(&g_wmu);
         while(!g_wwant) pthread_cond_wait(&g_wcv, &g_wmu);
-        memcpy(paths, g_wpaths, sizeof paths); n = g_wn; idx = g_widx; gen = g_wgen; ac_gen = g_wac_gen;
+        paths = malloc(sizeof g_wpaths);
+        if(paths) memcpy(paths, g_wpaths, sizeof g_wpaths);
+        n = paths ? g_wn : 0; idx = g_widx; gen = g_wgen; ac_gen = g_wac_gen;
+        library=g_wlibrary; media=g_wmedia;
         g_wwant = 0;
         pthread_mutex_unlock(&g_wmu);
         sprite_t sp = { .idx = idx, .asked = 1 };
-        uint8_t src[AW_SRC*AW_SRC*4];
-        for(int i=0;i<n;i++){
+        /* Keep the pixel scratch off the worker stack now that demand resolution
+         * can nest SQLite and decoder frames beneath this caller. */
+        uint8_t *src=malloc(AW_SRC*AW_SRC*4);
+        for(int i=0;src && i<n;i++){
             pthread_mutex_lock(&g_wmu);
             int stale = gen != g_wgen;
             pthread_mutex_unlock(&g_wmu);
             if(stale) break;
             if(!paths[i][0]) continue;
             if(!sd_io_begin()) break;
-            char cov[600];
-            int loaded = artcache_cover_path(paths[i], cov, sizeof cov)==0 && aw_read_bmp(cov, src)==0;
+            const char *cov="/tmp/wall-cover.bmp",*thumb="/tmp/wall-thumb.bmp",*bg="/tmp/wall-bg.bmp";
+            art_resolution proof;
+            ui_decode_lock();
+            pthread_mutex_lock(&g_wmu); stale=gen!=g_wgen; pthread_mutex_unlock(&g_wmu);
+            unsigned token;
+            int rc=stale || !ui_decode_speculative(&token) ? -2 : artcache_resolve_cover(paths[i],cov,thumb,bg,3,token,NULL,&proof);
+            ui_decode_unlock();
+            int loaded=rc==0 && media==sd_io_generation() && library==ipc_library_epoch() &&
+                artcache_resolution_current(paths[i],&proof) && aw_read_bmp(cov,src)==0;
             sd_io_end();
+            if(rc==-2){ sp.asked=0; break; }
             if(!loaded) continue;
             sp.fbuf = malloc(AW_SRC*AW_SPR_H*4); sp.sbuf = malloc(AW_SIDE_W*AW_SPR_H*4);
             if(sp.fbuf && sp.sbuf){
@@ -170,9 +194,10 @@ static void *aw_worker(void *arg){
             }else aw_pixels_free(&sp);
             break;
         }
+        free(src); free(paths);
         pthread_mutex_lock(&g_wmu);
         g_wbusy = 0;
-        if(gen == g_wgen){ g_wres = sp; g_wres_gen = gen; g_wres_ac_gen = ac_gen; g_wready = 1; }
+        if(gen == g_wgen){ g_wres = sp; g_wres_gen = gen; g_wres_ac_gen = ac_gen; g_wres_library=library; g_wres_media=media; g_wready = 1; }
         else aw_pixels_free(&sp);
         pthread_mutex_unlock(&g_wmu);
     }
@@ -258,6 +283,7 @@ static void aw_labels(void){
     }else lv_obj_add_flag(g_initial, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(g_name, g_names[g_cur]);
     lv_label_set_text(g_artist, mdb_artist_missing(g_artists[g_cur]) ? "Unknown artist" : g_artists[g_cur]);
+    indic_stack_fit(g_name,g_artist,NULL);
     char cc[24]; snprintf(cc,sizeof cc,"%d / %d", g_cur+1, g_nalb); lv_label_set_text(g_counter, cc);
 }
 static void aw_render_all(void){ for(int c=0;c<AW_CARDS;c++) aw_render_card(c); }
@@ -365,8 +391,14 @@ static char (*g_seed_names)[MDB_STR];
 static int         g_seed_n, g_seed_cur;
 static lv_timer_t *g_seed_timer;
 static int *g_seed_rep;                                     /* per album: representative SONG.ID (0 = none) */
+static void aw_seed_clear(void){
+    if(g_seed_timer){ lv_timer_delete(g_seed_timer); g_seed_timer = NULL; }
+    free(g_seed_names); free(g_seed_rep); g_seed_names = NULL; g_seed_rep = NULL;
+    g_seed_n = g_seed_cur = 0;
+}
 static void aw_seed_cb(lv_timer_t *t){
-    if(!g_seed_names || g_seed_cur >= g_seed_n){ lv_timer_delete(t); g_seed_timer = NULL; return; }
+    if(!g_seed_names || g_seed_cur >= g_seed_n){ aw_seed_clear(); return; }
+    if(!ui_prewarm_enabled()){ lv_timer_set_period(t,2000); return; }
     lv_timer_set_period(t, 50);                                 /* back to full pace (a full queue slows it below) */
     for(int k=0; k<3 && g_seed_cur < g_seed_n; k++){
         /* The album's representative song (its first in library order, recorded when the album cache was built):
@@ -377,7 +409,7 @@ static void aw_seed_cb(lv_timer_t *t){
         for(int pass = 0; pass < 2; pass++){
             int found = 0;
             for(int i=0;i<m;i++){
-                char track[512]; track[0]=0;
+                char track[TRACK_PATH_MAX]; track[0]=0;
                 int ready=mdb_song_path(ids[i],track,sizeof track);
                 if(ready<0){ lv_timer_set_period(t,2000); return; }
                 if(ready>0 && track[0]){
@@ -396,38 +428,54 @@ static void aw_seed_cb(lv_timer_t *t){
         }
         g_seed_cur++;
     }
+    if(g_seed_cur >= g_seed_n) aw_seed_clear();
 }
 void albumwall_prewarm_seed(void){                          /* MAIN thread: (re)start the incremental enqueue walk */
-    static char (*artists)[MDB_STR]; static int *counts; static int seed_cap = 0;
+    aw_seed_clear();
     int want = mdb_album_count();                           /* size to the real album count (no >600 truncation) */
-    if(want < 1) return;                                    /* <0 = OOM building the cache, 0 = empty -> nothing to seed (retry next start) */
-    if(!g_seed_names || seed_cap < want){                   /* main-thread only + repopulated below -> free+malloc safe */
-        free(g_seed_names); free(artists); free(counts); free(g_seed_rep);
-        g_seed_names = malloc((size_t)want*MDB_STR);
-        artists      = malloc((size_t)want*MDB_STR);
-        counts       = malloc((size_t)want*sizeof(int));
-        g_seed_rep   = malloc((size_t)want*sizeof(int));
-        if(!g_seed_names || !artists || !counts || !g_seed_rep){ free(g_seed_names); free(artists); free(counts); free(g_seed_rep); g_seed_names=NULL; artists=NULL; counts=NULL; g_seed_rep=NULL; seed_cap=0; return; }
-        seed_cap = want;
+    if(want < 1) return;                                    /* OOM or empty: retry next start */
+    g_seed_names = malloc((size_t)want*MDB_STR);
+    char (*artists)[MDB_STR] = malloc((size_t)want*MDB_STR);
+    int *counts = malloc((size_t)want*sizeof(int));
+    g_seed_rep = malloc((size_t)want*sizeof(int));
+    if(!g_seed_names || !artists || !counts || !g_seed_rep){
+        free(artists); free(counts); aw_seed_clear(); return;
     }
-    g_seed_n = mdb_albums(g_seed_names, artists, counts, seed_cap); g_seed_cur = 0;
-    if(mdb_album_rep_ids(g_seed_rep, seed_cap) != g_seed_n)
-        for(int i=0;i<seed_cap;i++) g_seed_rep[i] = 0;      /* reps unavailable -> every album uses the fallback scan */
-    if(g_seed_n > 0 && !g_seed_timer) g_seed_timer = lv_timer_create(aw_seed_cb, 50, NULL);
+    g_seed_n = mdb_albums(g_seed_names, artists, counts, want);
+    free(artists); free(counts);
+    if(g_seed_n <= 0){ aw_seed_clear(); return; }
+    if(mdb_album_rep_ids(g_seed_rep, want) != g_seed_n)
+        for(int i=0;i<want;i++) g_seed_rep[i] = 0;           /* reps unavailable -> use the fallback scan */
+    g_seed_timer = lv_timer_create(aw_seed_cb, 50, NULL);
+    if(!g_seed_timer) aw_seed_clear();
 }
 
 static lv_timer_t *g_prefetch;
 static int g_active;
 static int g_prefetch_cur = -1;                  /* centre whose neighbours are settled; -1 = work left */
+
+void albumwall_wake(void){
+    if(!g_active) return;
+    aw_cancel();
+    for(int i=0;i<AW_LRU;i++)
+        if(g_lru[i].idx>=0 && !g_lru[i].has_cover)
+            g_lru[i].asked=0;
+    g_prefetch_cur=-1;
+}
 /* After leaving: stop the worker at once; a fling still runs to its target, so the sprites go only once the
  * root is hidden and the motion has settled. 1 = nothing left to clean up. */
 static int aw_leave(void){
-    if(g_active){ aw_cancel(); g_active = 0; g_drag_on = 0; }
+    if(g_active){ aw_cancel(); artcache_protect(2,NULL,0); memset(g_wall_pins,0,sizeof g_wall_pins); g_active = 0; g_drag_on = 0; }
     int held = 0;
     for(int i=0;i<AW_LRU;i++) if(g_lru[i].idx>=0) held = 1;
-    if(!held) return 1;
+    if(!held && !g_names) return 1;
     if(!g_root || !lv_obj_has_flag(g_root, LV_OBJ_FLAG_HIDDEN) || g_animating) return 0;
     for(int i=0;i<AW_LRU;i++) if(g_lru[i].idx>=0) aw_drop(&g_lru[i]);
+    if(g_names && g_cur >= 0 && g_cur < g_nalb)
+        snprintf(g_selected, sizeof g_selected, "%s", g_names[g_cur]);
+    free(g_names); free(g_artists); free(g_counts);
+    g_names = g_artists = NULL; g_counts = NULL; g_names_cap = g_nalb = 0;
+    g_prefetch_cur = -1;
     return 1;
 }
 /* Collect a finished result, then ask for the nearest missing neighbour (one request at a time).
@@ -440,7 +488,7 @@ static int aw_prefetch_step(unsigned g){
         pthread_mutex_unlock(&g_wmu);
         if(!sp.has_cover && ac_gen != g) sp.asked = 0;   /* a cover landed after this miss was read: retry */
         int installed = 0;
-        if(gen == g_wgen && sd_io_allowed()) for(int i=0;i<AW_LRU;i++){
+        if(gen == g_wgen && sd_io_allowed() && g_wres_media==sd_io_generation() && g_wres_library==ipc_library_epoch()) for(int i=0;i<AW_LRU;i++){
             sprite_t *dst = &g_lru[i];
             if(dst->idx != sp.idx) continue;
             uint32_t tick = dst->tick; aw_drop(dst); *dst = sp; dst->tick = tick;
@@ -479,6 +527,11 @@ static int aw_prefetch_step(unsigned g){
                     if(g_prefetch) lv_timer_set_period(g_prefetch,2000);
                     pthread_mutex_unlock(&g_wmu); return 1;
                 }
+                for(int i=0;i<g_wn;i++){
+                    g_wall_pins[g_wall_pin_next++%96]=artcache_pin_key(g_wpaths[i]);
+                }
+                artcache_protect_keys(2,g_wall_pins,96);
+                g_wlibrary=ipc_library_epoch(); g_wmedia=sd_io_generation();
                 g_widx = sp->idx; g_wac_gen = g; sp->asked = 1; g_wbusy = g_wwant = 1;
                 pthread_cond_signal(&g_wcv);
             }
@@ -526,6 +579,11 @@ void albumwall_refresh(void){
     extern void ui_library_check(void) __attribute__((weak));
     if(ui_library_check) ui_library_check();
     if(!g_root) return;
+    /* The catalogue groups albums by exact name, across artists. Save before buffer growth. */
+    char selected[MDB_STR];
+    snprintf(selected, sizeof selected, "%s", g_selected);
+    if(g_names && g_cur >= 0 && g_cur < g_nalb)
+        snprintf(selected, sizeof selected, "%s", g_names[g_cur]);
     aw_cancel(); g_active = 1;
     g_prefetch_cur = -1;
     if(!g_aw_inited){
@@ -574,6 +632,11 @@ void albumwall_refresh(void){
         lv_obj_center(e); lv_obj_set_style_text_color(e, TC(TEXT_MUTED), 0);
         return;
     }
+    if(selected[0]){
+        for(int i=0;i<g_nalb;i++){
+            if(!strcmp(g_names[i], selected)){ g_cur = i; break; }
+        }
+    }
     if(g_cur >= g_nalb) g_cur = 0;
     g_posf = g_cur; g_drag_on = 0;   /* sync the continuous coordinate to the (possibly clamped) centre album */
     albumwall_prewarm_seed();        /* (re)kick the background cover fill for the current album set */
@@ -584,18 +647,18 @@ void albumwall_refresh(void){
     for(int k=0;k<AW_CARDS;k++) g_side[zc[k]]  = aw_img();
     for(int k=0;k<AW_CARDS;k++) g_front[zc[k]] = aw_img();
 
-    g_initial = lv_label_create(g_root);
+    g_initial = indic_label_create(g_root);
     lv_obj_set_style_text_font(g_initial, TF(USER_20), 0);
     lv_obj_set_style_text_color(g_initial, TC(TEXT_MUTED), 0);
     lv_obj_align(g_initial, LV_ALIGN_TOP_MID, 0, 72 + AW_SRC/2 - 12);
     lv_obj_add_flag(g_initial, LV_OBJ_FLAG_HIDDEN);
 
-    g_name = lv_label_create(g_root);
+    g_name = indic_label_create(g_root);
     lv_label_set_long_mode(g_name, LV_LABEL_LONG_DOT); lv_obj_set_size(g_name, 260, 24);
     lv_obj_set_style_text_align(g_name, LV_TEXT_ALIGN_CENTER, 0); lv_obj_align(g_name, LV_ALIGN_TOP_MID, 0, 266);
     lv_obj_set_style_text_font(g_name, TF(USER_18), 0); lv_obj_set_style_text_color(g_name, TC(TEXT_PRIMARY), 0);
 
-    g_artist = lv_label_create(g_root);
+    g_artist = indic_label_create(g_root);
     lv_label_set_long_mode(g_artist, LV_LABEL_LONG_DOT); lv_obj_set_size(g_artist, 220, 20);
     lv_obj_set_style_text_align(g_artist, LV_TEXT_ALIGN_CENTER, 0); lv_obj_align(g_artist, LV_ALIGN_TOP_MID, 0, 292);
     lv_obj_set_style_text_font(g_artist, TF(USER_16), 0); lv_obj_set_style_text_color(g_artist, TC(TEXT_MUTED), 0);

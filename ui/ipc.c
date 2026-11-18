@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+#include "ui_wake.h"
 /* Copyright (C) 2026 diskOS contributors */
 #include "ipc.h"
 #include "receiver.h"
@@ -54,6 +55,8 @@ static unsigned g_a2_serial, g_a2_playing_report;
 static unsigned g_prepare_playing_frames;
 #endif
 static int g_a2_stopped, g_a2_candidate_unloaded;
+static uint64_t g_a2_report_ms;  /* [g_recov_mu] monotonic receipt time of g_a2_report */
+static int g_a2_report_unloaded; /* [g_recov_mu] g_a2_report had a present but empty song: nothing loaded */
 /* Main-thread send evidence only; no command or player-state mutation. */
 static unsigned g_resume_toggle, g_resume_after_report;
 static int g_confirmed;         /* [g_recov_mu] accepted a2 state report this generation */
@@ -155,6 +158,17 @@ static int unescape(const char*s,int n,char*dst,int dstsz){
     return (i<n) ? -1 : o;   /* i<n -> stopped on the o limit, input left over = truncated */
 }
 
+/* 1 when the song object's file path cannot be carried whole by g_state.path (TRACK_PATH_MAX - 1 bytes plus NUL).
+ * The scratch buffer keeps the decoder's 4 spare bytes beyond the real limit, so exactly 1023 decoded bytes are
+ * accepted and 1024 are refused whatever mix of raw UTF-8 and \uXXXX escapes spells them. */
+static int song_path_overflows(const char *song, jsmntok_t *st, int n2){
+    char t[TRACK_PATH_MAX + 4];
+    int sv=find_val(song,st,n2,"song_file_path");
+    if(sv<0) return 0;
+    int decoded=unescape(song+st[sv].start, st[sv].end-st[sv].start, t, sizeof t);
+    return decoded<0 || decoded>=TRACK_PATH_MAX;
+}
+
 /* Zero the current-track fields. Caller must hold g_mu. */
 static void clear_track(void){
     if(g_state.player_confirmed) g_state.playback_token++;
@@ -163,7 +177,7 @@ static void clear_track(void){
     g_state.is_cue_valid=g_state.is_sacd_valid=0;
     g_state.song_id_raw=g_state.pos_id_raw=0;
     g_title_frozen=g_title_stock=0; g_stock_title[0]=0;
-    g_state.have_track=0;
+    g_state.have_track=0; g_state.path_unavailable=0;
     g_state.title[0]=0; g_state.artist[0]=0; g_state.album[0]=0; g_state.path[0]=0;
     g_state.duration_ms=0; g_state.position_ms=0; g_state.pos_id=0;
     g_state.sample_rate=0; g_state.is_dsd=0;
@@ -246,7 +260,6 @@ static int stock_a2_string(const char *s, int n, int depth, int path,
             }
         }
         bytes+=slashes+(c!=0);
-        if(path==1 && bytes>(int)sizeof g_state.path-4) return 0;
         while(slashes--){
             if(!stock_a2_append(out,used,cap,"\\\\\\\\",4)) return 0;
         }
@@ -629,7 +642,10 @@ static int parse_a2(const char*payload,int len){
     /* A truncated title cannot be used as eligibility evidence. Reject before publication. */
     if(n2>0){
         char title[sizeof g_state.title]; int sv=find_val(song,st,n2,"song_name");
-        if(sv>=0 && unescape(song+st[sv].start,st[sv].end-st[sv].start,title,sizeof title)<0) return 0;
+        /* An oversized path is checked first: that report is published as unavailable even when its title is also
+         * oversized, instead of leaving the previous song on screen. */
+        if(sv>=0 && unescape(song+st[sv].start,st[sv].end-st[sv].start,title,sizeof title)<0 &&
+           !song_path_overflows(song,st,n2)) return 0;
     }
     /* Confirmation requires a complete object and a numeric state, not arbitrary JSON.
      * Partial metadata still follows the existing publication rules below. */
@@ -648,7 +664,7 @@ static int parse_a2(const char*payload,int len){
         state_val>=0 && tk[state_val].type==JSMN_PRIMITIVE &&
         stock_a2_scalar(payload+tk[state_val].start,tk[state_val].end-tk[state_val].start,0);
     pthread_mutex_lock(&g_mu);
-    char oldpath[256]; snprintf(oldpath, sizeof oldpath, "%s", g_state.path);   /* detect a track-identity change */
+    char oldpath[sizeof g_state.path]; snprintf(oldpath, sizeof oldpath, "%s", g_state.path);   /* detect a track-identity change */
     v=find_val(payload,tk,nt,"state");        if(v>=0) g_state.state=(int)tok_long(payload,&tk[v]);
     v=find_val(payload,tk,nt,"playing_num");  if(v>=0) copy_tok(payload,&tk[v],g_state.playing_num,sizeof g_state.playing_num);
     v=find_val(payload,tk,nt,"work_mode");    if(v>=0) copy_tok(payload,&tk[v],g_state.work_mode,sizeof g_state.work_mode);
@@ -662,8 +678,8 @@ static int parse_a2(const char*payload,int len){
              * positions would bind to the old track and corrupt its bookmark. unescape (not copy_tok) every
              * string: the inner song JSON still carries \/ \" \uXXXX after the outer unescape. */
             char t_title[sizeof g_state.title]={0}, t_artist[sizeof g_state.artist]={0};
-            char t_album[sizeof g_state.album]={0}, t_path[sizeof g_state.path]={0};
-            long t_dur=-1; int t_sr=-1, t_dsd=-1, have_path=0, sv;
+            char t_album[sizeof g_state.album]={0}, t_path[sizeof g_state.path + 4]={0};
+            long t_dur=-1; int t_sr=-1, t_dsd=-1, have_path=0, path_long=0, sv;
             uint64_t song_id=0, pos_id=0; int sid_ok=0, pid_ok=0, cue=0, sacd=0, cue_ok=0, sacd_ok=0;
             sv=find_val(song,st,n2,"id"); if(sv>=0) sid_ok=raw_id(song,&st[sv],&song_id);
             sv=find_val(song,st,n2,"pos_id"); if(sv>=0) pid_ok=raw_id(song,&st[sv],&pos_id);
@@ -673,10 +689,12 @@ static int parse_a2(const char*payload,int len){
             sv=find_val(song,st,n2,"song_artist_name");   if(sv>=0) unescape(song+st[sv].start, st[sv].end-st[sv].start, t_artist, sizeof t_artist);
             sv=find_val(song,st,n2,"song_album_name");    if(sv>=0) unescape(song+st[sv].start, st[sv].end-st[sv].start, t_album,  sizeof t_album);
             sv=find_val(song,st,n2,"song_file_path");
-            /* a truncated path can alias a DIFFERENT real file -> unescape overflow means NO usable identity */
+            /* a truncated path can alias a DIFFERENT real file -> unescape overflow means NO usable identity.
+             * The track is still published as UNAVAILABLE (path_unavailable) instead of the frame being dropped,
+             * which would leave the previous song on screen as if current; it just cannot confirm a session. */
             if(sv>=0){
                 int decoded=unescape(song+st[sv].start, st[sv].end-st[sv].start, t_path, sizeof t_path);
-                if(decoded<0) accepted=0;
+                if(decoded<0 || decoded>=(int)sizeof g_state.path){ path_long=1; accepted=0; }   /* never confirms a session; still published as unavailable below */
                 else if(t_path[0]) have_path=1;
             }
             sv=find_val(song,st,n2,"song_duration_time"); if(sv>=0) t_dur=tok_long(song,&st[sv]);
@@ -692,7 +710,7 @@ static int parse_a2(const char*payload,int len){
                      * duration stays unknown until this track reports its length. */
                     g_state.position_ms=0; g_state.pos_seq=0; g_state.duration_ms=0;
                 }
-                g_state.player_confirmed=1; g_state.provisional=0;
+                g_state.player_confirmed=1; g_state.provisional=0; g_state.path_unavailable=0;
                 g_state.song_id_raw=song_id; g_state.pos_id_raw=pos_id;
                 g_state.song_id_valid=sid_ok; g_state.pos_id_valid=pid_ok;
                 if(strcmp(g_stock_title,t_title) || g_state.is_cue!=cue || g_state.is_sacd!=sacd ||
@@ -701,7 +719,7 @@ static int parse_a2(const char*payload,int len){
                 g_state.is_cue=cue; g_state.is_sacd=sacd;
                 g_state.is_cue_valid=cue_ok; g_state.is_sacd_valid=sacd_ok;
                 strcpy(g_stock_title,t_title);
-                snprintf(g_state.path, sizeof g_state.path, "%s", t_path);
+                snprintf(g_state.path, sizeof g_state.path, "%.*s", TRACK_PATH_MAX - 1, t_path);   /* t_path already proven shorter */
                 if(!g_title_frozen){
                     strcpy(g_state.title,t_title);
                     if(!title_pending(t_path,t_title) || (cue_ok && cue) || (sacd_ok && sacd)) g_title_stock=1;
@@ -717,7 +735,13 @@ static int parse_a2(const char*payload,int len){
             } else {
                 /* a present song with NO usable path can't establish identity -> clear rather than bind new
                  * positions to the previous track (which would corrupt its bookmark). */
+                int was_unavailable=g_state.path_unavailable;
                 clear_track();
+                if(path_long){
+                    /* a new track the UI cannot identify: say so, once per change */
+                    if(!was_unavailable) g_state.playback_token++;
+                    g_state.path_unavailable=1;
+                }
             }
         }
     } else if(v>=0 && tk[v].type==JSMN_STRING){
@@ -756,12 +780,16 @@ static int all_hex(const char*s,int n){
 
 /* the player's screen sleep/wake ("aa23000C0000" / "...0001", echo_sys_control.c V2.57) and power-off ("aa03"):
  * counters so the main loop sees every event (the latest value wins between its polls) */
-static unsigned g_scr_seq, g_aa03_seq; static int g_scr_on = -1;
+static unsigned g_scr_seq, g_aa03_seq, g_aa03_off_seq; static int g_scr_on = -1;
+/* aa03 = "aa03" + 000C + a 4-digit value. V2.57 mq_player (static RE, 0x4e6f0c, 0x4e77b0, 0x4ea5a4): value 0000 is sent by
+ * the player's power-off routine (then sleep 3, killall -9 mq_ui, poweroff -f) and by its reboot routine (sleep 2, reboot); value
+ * 0002 is the first-press prompt, after which the player keeps running. g_aa03_off_seq counts only the 0000 frames (power
+ * or reboot is imminent); any other or unreadable value only counts in g_aa03_seq, as before. */
 /* Called under g_recov_mu: frame state belongs only to this queue generation. */
 static void screen_new_generation(void){
     g_confirmed = 0; g_a2_stopped = 0; g_a2_playing_report = 0;
     g_local_publication.state=LOCAL_OPEN; g_local_publication.return_arm=0;
-    g_generation++; g_scr_on = -1; g_scr_seq = g_aa03_seq = 0;
+    g_generation++; g_scr_on = -1; g_scr_seq = g_aa03_seq = g_aa03_off_seq = 0;
 }
 /* The stock player's charging report, aa1f (V2.57 mq_player, adc_control.c loop_adc_check_thread; static RE of the
  * fixture binary). The player's charging flag (0x8990ec) is only ever stored as 0 or 1 (0x4f2390, 0x4f27ac, 0x4f27d4,
@@ -821,6 +849,75 @@ static void receiver_position(const char *buf,int n){
     g_receiver_meta.pos_rx_ms=receiver_now_ms();
     g_receiver_meta.pos_item_revision=g_receiver_meta.item_revision; g_receiver_meta.pos_seq++;
 }
+/* ---- battery shutdown: stopping local playback before the card closes ----
+ * 0201000C0000 is the only pause the player has, and it is a TOGGLE (COMMAND_MAP.md 0201; no idempotent pause or stop
+ * is documented). An a2 report carries no sequence or correlation field (parse_a2 reads state, playing_num, work_mode,
+ * love and song), so receipt order alone never proves which command a report reflects. A2 state: 0 playing, 1 paused,
+ * 2 stopped (V2.57 0x4248c0..0x4249f0, see ipc_resume_snapshot; the V2.40 map is UNVERIFIED). Only 1 and 2 are stop
+ * proof; any other value (3 is written by a 0666 re-init, main.c) is neither playing nor stopped and never proves a stop.
+ * The rules, all fail closed (no second toggle, no completion, the Disc stays on with the card closed):
+ * - Every frame that can change what plays (0100/0102/0103/0201, and the source/route frames 0642/0657/0666) stamps the
+ *   QUIET clock when it reaches the wire, and so does a press of the physical play/pause key that diskOS can see
+ *   (ipc_note_external_transport). A report counts only if it arrived BATTERY_STOP_QUIET_MS or more after that stamp.
+ * - At most one toggle, and only for a fresh, quiet, complete report of a loaded track playing.
+ * - After the toggle, reports may only move one way: playing, playing..., stopped, stopped. A playing report after a
+ *   stopped one means the stop was older than our toggle and the toggle restarted the music: failed.
+ * - Done after the toggle only with a complete stop report (state 2, or state 1 with a loaded or an empty song) received
+ *   BATTERY_STOP_SETTLE_MS or more after the first stop report, and the newest report still a stop.
+ * - Once done, the stop must keep holding until 0806 is sent: every later report must be a stop (or, for a receiver,
+ *   the receiver rule must still hold), checked on receipt and again by ipc_battery_stop_holds right before the
+ *   shutdown core sends 0806, which also waits BATTERY_STOP_SETTLE_MS after done. A report of playing at any time before
+ *   0806 fails the shutdown closed (power.c battery_sync_poll).
+ * QUIET and SETTLE assume the player answers a queued 0201 in well under a second (UNVERIFIED on the Disc: reply latency
+ * of a queued 0201 on V2.40 and V2.57). A slower player makes the drain fail closed more often; it can still power off
+ * with audio playing only if no report of the restarted audio arrives before 0806 (at least SETTLE after done). */
+#define BATTERY_STOP_PROBE_MS  250u    /* 02020008 solicits a full report this often while the drain or hold waits */
+#define BATTERY_STOP_QUIET_MS  1000u   /* a report counts only this long after the last stamped frame or key press */
+#define BATTERY_STOP_SETTLE_MS 1000u   /* first stop report -> done; and done -> 0806 */
+enum { BATTERY_DONE_NO, BATTERY_DONE_LOCAL, BATTERY_DONE_RECEIVER };
+static struct {
+    int active, sent, failed, probed, stop_seen, stopped, done, paused, fail_probed;
+    unsigned generation, report, transport, pause_serial, fail_serial;
+    uint64_t token, mode_sequence, probe_at, stop_at, done_at, fail_probe_at;
+} g_battery_stop; /* [g_recov_mu], then g_mu for track evidence, then TX */
+static uint64_t g_transport_wire_ms; static int g_transport_wire_have; /* [g_tx_mu] QUIET clock (see above) */
+static int g_battery_pause_pass; /* [g_tx_mu] one admitted pause after a failed drain */
+static int a2_report_loaded(void){
+    return g_a2_report.have_track && g_a2_report.player_confirmed && !g_a2_report.provisional;
+}
+static int a2_stop_state(int state){ return state == 1 || state == 2; }
+/* The newest complete report proves a stop: stopped, or paused with a loaded track or with nothing loaded. A short
+ * {"state":1} reply (no song) is never this proof. [g_recov_mu + g_mu] */
+static int a2_report_stop_proof(void){
+    return g_a2_report.state == 2 ||
+           (g_a2_report.state == 1 && (a2_report_loaded() || g_a2_report_unloaded));
+}
+/* RX thread, under g_recov_mu and g_mu, once per complete report of the current generation. Every report is seen here,
+ * so a stop followed by playing cannot hide between two main-loop polls. */
+static void battery_stop_report_locked(uint64_t at){
+    if(!g_battery_stop.active || g_battery_stop.failed) return;
+    if(g_battery_stop.done){
+        /* Proven stopped (or receiving): anything that is not a stop state may be audio again. */
+        if(!a2_stop_state(g_a2_report.state)) g_battery_stop.failed=1;
+        return;
+    }
+    if(!g_battery_stop.sent) return;
+    /* A different loaded track after the toggle: nothing proves which audio the toggle reached. */
+    if(a2_report_loaded() && g_a2_report.state!=2 && g_a2_report.playback_token!=g_battery_stop.token){
+        g_battery_stop.failed=1; return;
+    }
+    if(g_a2_report.state==0){
+        if(g_battery_stop.stop_seen) g_battery_stop.failed=1;   /* stopped, then playing: never toggle again */
+        return;                                                  /* playing before any stop: may predate the toggle */
+    }
+    if(!a2_stop_state(g_a2_report.state)){                      /* unknown state: neither playing nor a stop */
+        if(g_battery_stop.stop_seen) g_battery_stop.failed=1;    /* after a stop it may be audio again: fail closed */
+        return;
+    }
+    if(!g_battery_stop.stop_seen){ g_battery_stop.stop_seen=1; g_battery_stop.stop_at=at; }
+    if(at-g_battery_stop.stop_at>=BATTERY_STOP_SETTLE_MS && a2_report_stop_proof())
+        g_battery_stop.stopped=1;
+}
 static void conv_on_reply(const char*buf,int n);   /* still-image conversion (end of file) */
 static void conv_new_generation(unsigned generation);
 static void parse_frame(const char*buf,int n){
@@ -848,7 +945,11 @@ static void parse_frame(const char*buf,int n){
         return;
     }
     if(buf[0]=='a'&&buf[1]=='a'&&buf[2]=='0'&&buf[3]=='3'){
-        pthread_mutex_lock(&g_recov_mu); g_aa03_seq++; pthread_mutex_unlock(&g_recov_mu);
+        int off = n == 12 && !memcmp(buf, "aa03000C0000", 12);
+        pthread_mutex_lock(&g_recov_mu);
+        g_aa03_seq++;
+        if(off) g_aa03_off_seq++;
+        pthread_mutex_unlock(&g_recov_mu);
         return;
     }
     if((buf[0]=='a' && buf[1]=='1') || (buf[0]=='a' && buf[1]=='2')){
@@ -888,7 +989,7 @@ static void parse_frame(const char*buf,int n){
     if(buf[0]=='a'&&buf[1]=='8'&&buf[2]=='1'&&buf[3]=='0'){ conv_on_reply(buf,n); return; }
     /* Every aa1f of 8 bytes or more lands here (shorter frames end at the n<8 guard above, like every report). */
     if(!memcmp(buf,"aa1f",4)){ charge_on_frame(buf,n); return; }
-    if(buf[0]==97 && buf[1]==49){ /* "a1<type2><len4><payload>" position, e.g. a1030010 + 8-hex ms */
+    if(!memcmp(buf,"a103",4)){ /* Only a103 reports position; other a1 types include mode echoes. */
         if(n<8) return;
         char lh[5]={buf[4],buf[5],buf[6],buf[7],0};
         if(!all_hex(lh,4)) return;               /* no valid length field -> reject */
@@ -927,6 +1028,9 @@ static void parse_frame(const char*buf,int n){
                 g_a2_stopped=1;
             else if(g_a2_report.have_track)
                 g_a2_stopped=0;
+            g_a2_report_ms=receiver_now_ms();
+            g_a2_report_unloaded=g_a2_candidate_unloaded;
+            battery_stop_report_locked(g_a2_report_ms);
             pthread_mutex_unlock(&g_mu);
         }
         pthread_mutex_unlock(&g_recov_mu);
@@ -967,7 +1071,7 @@ static void parse_frame(const char*buf,int n){
         }
         pthread_mutex_unlock(&g_recov_mu);
     }
-    /* NB: for playback the player emits a1/a2/a714 to /ui (a2=state/love/work_mode/track, a1=position,
+    /* NB: for playback the player emits a103/a2/a714 to /ui (a2=state/love/work_mode/track, a103=position,
      * a714=volume) - no a622/a639/a704 completion replies. SEPARATELY, a 0657 mode CHANGE makes it announce
      * a607 (external/input mode) to /ui, parsed above (a bare 0607 query is not answered on /ui). */
 }
@@ -1009,6 +1113,7 @@ static int rx_do_reopen(void){
     charge_new_generation();
     unsigned generation=g_generation;
     pthread_mutex_unlock(&g_recov_mu);
+    ui_notify(UI_WAKE_IPC);
     pthread_mutex_lock(&g_mu);
     int had_path=g_state.path[0]!=0;
     clear_track(); g_state.playback_token++; g_state.player_generation=generation; g_state.seq++;
@@ -1073,7 +1178,7 @@ static void *ipc_thread(void*arg){
         rx_arm_barrier();
         struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 1;
         ssize_t n = mq_timedreceive(g_rx, g_rxbuf, g_rxbufsz, NULL, &ts);
-        if(n>=0){ pthread_mutex_lock(&g_recov_mu); g_rx_frames++; pthread_mutex_unlock(&g_recov_mu); parse_frame(g_rxbuf,(int)n); }
+        if(n>=0){ pthread_mutex_lock(&g_recov_mu); g_rx_frames++; pthread_mutex_unlock(&g_recov_mu); parse_frame(g_rxbuf,(int)n); ui_notify(UI_WAKE_IPC|UI_WAKE_STILL); }
         else if(errno==ETIMEDOUT) continue;   /* normal idle wake */
         else if(errno==EINTR) continue;
         else if(errno==EBADF){ if(rx_do_reopen()!=0) usleep(50000); }  /* lost fd -> reattach now (we're on the RX thread); if the queue is still absent, back off 50ms instead of busy-spinning on the dead fd */
@@ -1173,9 +1278,17 @@ int ipc_player_mode(void){
  * to re-arm after a restart (send the init once per generation). */
 void ipc_screen_snapshot(int *on, unsigned *scr_seq, unsigned *poweroff_seq, unsigned *generation){
     pthread_mutex_lock(&g_recov_mu);
-    if(on) *on=g_scr_on; if(scr_seq) *scr_seq=g_scr_seq; if(poweroff_seq) *poweroff_seq=g_aa03_seq;
+    if(on) *on=g_scr_on;
+    if(scr_seq) *scr_seq=g_scr_seq;
+    if(poweroff_seq) *poweroff_seq=g_aa03_seq;
     if(generation) *generation=g_generation;
     pthread_mutex_unlock(&g_recov_mu);
+}
+unsigned ipc_poweroff_announced(unsigned *generation){
+    pthread_mutex_lock(&g_recov_mu);
+    unsigned r = g_aa03_off_seq; if(generation) *generation = g_generation;
+    pthread_mutex_unlock(&g_recov_mu);
+    return r;
 }
 int ipc_charge_snapshot(ipc_charge_evidence *out){
     ipc_charge_evidence e;
@@ -1225,9 +1338,12 @@ unsigned ipc_generation(void){
  * Do not substitute presentation state or a position frame for this report. */
 int ipc_resume_snapshot(track_state_t *out, unsigned *serial, unsigned *toggle, unsigned *after_report){
     pthread_mutex_lock(&g_recov_mu);
+    pthread_mutex_lock(&g_mu);
     *out=g_a2_report; *serial=g_a2_serial;
     *toggle=g_resume_toggle; *after_report=g_resume_after_report;
-    int valid=g_confirmed && !g_rx_reopen && out->player_generation==g_generation;
+    int valid=g_confirmed && !g_rx_reopen && out->player_generation==g_generation &&
+        out->playback_token==g_state.playback_token;
+    pthread_mutex_unlock(&g_mu);
     pthread_mutex_unlock(&g_recov_mu);
     return valid;
 }
@@ -1376,7 +1492,15 @@ static int bt_autonext_restore(int policy, unsigned gen){
     fprintf(stderr, "BT autonext experiment: restored gapless=%d\n", g_bt_autonext.restore);
     return 0;
 }
+/* Battery ownership is held until shutdown recovery reopens admission. [g_tx_mu] */
+static int g_battery_stop_owned;
+static int transport_frame(const char *f){
+    return !strncmp(f,"0100",4) || !strncmp(f,"0102",4) ||
+           !strncmp(f,"0103",4) || !strncmp(f,"0201",4);
+}
 static int ipc_send_locked(const char *frame, int policy, unsigned generation){
+    int transport = transport_frame(frame);
+    if(g_battery_stop_owned && transport && !g_battery_pause_pass) return -1;
     bt_autonext_generation(generation);
     /* Restore before output mux, work/source mode or USB gadget changes, even
      * between polls. A failed restoration refuses the departure frame. */
@@ -1388,6 +1512,7 @@ static int ipc_send_locked(const char *frame, int policy, unsigned generation){
         frame = "0647000C0001";
     }
     int rc = ipc_send_wire_locked(frame, policy, generation);
+    if(rc == 0 && (transport || departure)){ g_transport_wire_ms = receiver_now_ms(); g_transport_wire_have = 1; }
     if(rc == 0 && departure){
         /* The UI retains its old BT MAC across partial route failures. Once a
          * departure lands, require BT mux + Local work-mode before re-entry. */
@@ -1403,7 +1528,7 @@ void ipc_bt_autonext_poll(uint32_t now, int eligible, int preference){
     /* Main thread only. Route departures also restore synchronously above. */
     if(polled && eligible == previous_eligible && (uint32_t)(now - last) < 1000) return;
     polled = 1; last = now; previous_eligible = eligible;
-    int enabled = bt_autonext_mode() && eligible && (preference == 0 || preference == 1);
+    int enabled = eligible && (preference == 0 || preference == 1) && bt_autonext_mode();
     if(!enabled && !pending) return; /* only this main-thread poll can activate */
     pthread_mutex_lock(&g_recov_mu);
     pthread_mutex_lock(&g_tx_mu);
@@ -1436,22 +1561,220 @@ static int ipc_send_internal(const char *frame, int policy, unsigned generation)
 }
 /* user-action send: a real failure raises the toast flag. */
 static unsigned g_transport_seq; /* main-thread sends and recovery only */
+void ipc_battery_stop_begin(void){
+    pthread_mutex_lock(&g_recov_mu); pthread_mutex_lock(&g_mu);
+    if(!g_battery_stop.active){
+        memset(&g_battery_stop,0,sizeof g_battery_stop);
+        g_battery_stop.active=1;
+        g_battery_stop.generation=g_generation;
+        g_battery_stop.token=g_state.playback_token;
+        g_battery_stop.report=g_a2_serial;
+        g_battery_stop.transport=g_transport_seq;
+        g_battery_stop.mode_sequence=g_mode_change_sequence;
+        pthread_mutex_lock(&g_tx_mu); g_battery_stop_owned=1; pthread_mutex_unlock(&g_tx_mu);
+    }
+    pthread_mutex_unlock(&g_mu); pthread_mutex_unlock(&g_recov_mu);
+}
+void ipc_battery_stop_end(void){
+    pthread_mutex_lock(&g_recov_mu);
+    pthread_mutex_lock(&g_tx_mu); g_battery_stop_owned=0; pthread_mutex_unlock(&g_tx_mu);
+    memset(&g_battery_stop,0,sizeof g_battery_stop);
+    pthread_mutex_unlock(&g_recov_mu);
+}
+/* A physical play/pause press the player handles itself (V2.57 x2000_key reader in main.c; V2.40 has no reader, so a
+ * press there is not seen). It restarts the QUIET clock like a frame diskOS sends. */
+void ipc_note_external_transport(void){
+    pthread_mutex_lock(&g_tx_mu);
+    g_transport_wire_ms=receiver_now_ms(); g_transport_wire_have=1;
+    pthread_mutex_unlock(&g_tx_mu);
+}
+/* Under g_recov_mu (and g_mu): the stamped frame or key press was QUIET ago or more, measured at `at`. */
+static int battery_quiet_since_locked(uint64_t at){
+    pthread_mutex_lock(&g_tx_mu);
+    int quiet=!g_transport_wire_have || at>=g_transport_wire_ms+BATTERY_STOP_QUIET_MS;
+    pthread_mutex_unlock(&g_tx_mu);
+    return quiet;
+}
+/* Under g_recov_mu and g_mu: the SD player is not the audio source. The player itself announced AirPlay receiving
+ * (wire mode 10) with local publication BLOCKED (entry complete; RESERVED = entry in flight and RETURN_* = a local
+ * return in flight keep waiting), or Bluetooth receiving (wire mode 6) with a stop report (state 1 or 2) newer than
+ * ownership. In both: no mode change since ownership, no stamped frame (route/source frames included) within QUIET,
+ * and the newest local report is not a loaded track playing. UNVERIFIED on the Disc: that neither receiver mode reads
+ * the card, and the a2 shape in Bluetooth receiving (a report that claims playing keeps the drain waiting: fail closed). */
+static int battery_receiver_drained_locked(void){
+    if(g_rx_reopen || g_battery_stop.mode_sequence!=g_mode_change_sequence) return 0;
+    if(!battery_quiet_since_locked(receiver_now_ms())) return 0;
+    int current=g_a2_report.player_generation==g_generation;
+    if(current && a2_report_loaded() && g_a2_report.state==0) return 0;
+    if(g_player_mode==10) return g_local_publication.state==LOCAL_BLOCKED;
+    if(g_player_mode==6)
+        return current && g_a2_serial!=g_battery_stop.report && a2_stop_state(g_a2_report.state);
+    return 0;
+}
+/* Under g_recov_mu and g_mu, while active: mark failure on anything that voids the evidence. Returns 1 if failed. */
+static int battery_stop_check_locked(void){
+    if(g_rx_reopen || g_battery_stop.generation!=g_generation || g_battery_stop.transport!=g_transport_seq)
+        g_battery_stop.failed=1;
+    if(!g_battery_stop.failed && g_battery_stop.done){
+        if(g_battery_stop.done==BATTERY_DONE_LOCAL){
+            if(g_a2_report.player_generation!=g_generation || !a2_stop_state(g_a2_report.state))
+                g_battery_stop.failed=1;
+        } else if(!battery_receiver_drained_locked()) g_battery_stop.failed=1;
+    }
+    return g_battery_stop.failed;
+}
+static void battery_stop_probe_locked(uint64_t now){
+    if(!g_battery_stop.probed || now-g_battery_stop.probe_at>=BATTERY_STOP_PROBE_MS){
+        g_battery_stop.probed=1; g_battery_stop.probe_at=now;
+        ipc_send_internal("02020008",SEND_PROBE,g_generation);
+    }
+}
+static void battery_stop_done_locked(int kind, uint64_t now){
+    if(!g_battery_stop.done){ g_battery_stop.done=kind; g_battery_stop.done_at=now; }
+}
+int ipc_battery_stop_poll(void){
+    uint64_t now=receiver_now_ms();
+    pthread_mutex_lock(&g_recov_mu); pthread_mutex_lock(&g_mu);
+    int done=0;
+    if(!g_battery_stop.active || battery_stop_check_locked()) goto out;
+    if(g_battery_stop.done){
+        done=1;   /* still holding (battery_stop_check_locked) */
+    } else if(g_battery_stop.sent){
+        /* battery_stop_report_locked judged every report since the toggle; the newest must still be a stop. */
+        if(g_battery_stop.stopped && a2_stop_state(g_a2_report.state)){ battery_stop_done_locked(BATTERY_DONE_LOCAL,now); done=1; }
+    } else if(battery_receiver_drained_locked()){
+        battery_stop_done_locked(BATTERY_DONE_RECEIVER,now); done=1;
+    } else if(g_confirmed && g_a2_serial!=g_battery_stop.report &&
+              g_a2_report.player_generation==g_generation &&
+              g_a2_report.state==g_state.state &&
+              g_a2_report.playback_token==g_state.playback_token &&
+              battery_quiet_since_locked(g_a2_report_ms)){
+        /* A complete report newer than ownership and quiet after the last stamped frame. Partial metadata and
+         * position-based presentation estimates never count. A track change before our toggle just makes this
+         * report the evidence. */
+        if(g_a2_report.state!=2 && g_a2_report.playback_token!=g_battery_stop.token)
+            g_battery_stop.token=g_a2_report.playback_token;
+        if(a2_report_stop_proof()){
+            battery_stop_done_locked(BATTERY_DONE_LOCAL,now); done=1;
+        } else if(g_a2_report.state==0 && a2_report_loaded()){
+            /* The one toggle. Evidence and dispatch share recovery/track/TX locks; no other transport can enter,
+             * including sleep/EOC, recovery and background sends. */
+            g_battery_stop.sent=1;
+            g_battery_stop.report=g_a2_serial;
+            g_battery_stop.transport=++g_transport_seq;
+            pthread_mutex_lock(&g_tx_mu);
+            if(ipc_send_wire_locked("0201000C0000",SEND_AUTOMATIC,g_generation)!=0) g_battery_stop.failed=1;
+            else { g_transport_wire_ms=receiver_now_ms(); g_transport_wire_have=1; }
+            pthread_mutex_unlock(&g_tx_mu);
+        }
+    }
+    if(!g_battery_stop.failed) battery_stop_probe_locked(now);   /* keep the evidence current, also once done */
+out:
+    pthread_mutex_unlock(&g_mu); pthread_mutex_unlock(&g_recov_mu);
+    return done;
+}
+/* The shutdown core asks this through the whole sync, right up to sending 0806. Never toggles. -1: the stop no longer
+ * holds (or was never proven): fail closed. 0: holding, but less than BATTERY_STOP_SETTLE_MS since done or less than
+ * BATTERY_STOP_QUIET_MS since a stamped frame or key press. 1: holding. */
+int ipc_battery_stop_holds(void){
+    uint64_t now=receiver_now_ms();
+    pthread_mutex_lock(&g_recov_mu); pthread_mutex_lock(&g_mu);
+    int r=-1;
+    if(g_battery_stop.active && !battery_stop_check_locked() && g_battery_stop.done){
+        /* A key press or stamped frame since done may be audio again: 0806 waits QUIET so its report is judged
+         * (battery_stop_report_locked fails the hold on any report that is not a stop). */
+        int proof=g_battery_stop.done!=BATTERY_DONE_LOCAL ||
+                  (a2_report_stop_proof() &&
+                   battery_quiet_since_locked(g_a2_report_ms));
+        r=now>=g_battery_stop.done_at+BATTERY_STOP_SETTLE_MS &&
+          battery_quiet_since_locked(now) && proof ? 1 : 0;
+        battery_stop_probe_locked(now);
+    }
+    pthread_mutex_unlock(&g_mu); pthread_mutex_unlock(&g_recov_mu);
+    return r;
+}
+/* The shutdown failed closed. Ownership stays (play, next, previous and seek remain refused). Ask the player for a
+ * current report: a pause may only be judged on a report that arrived after this. */
+static void battery_fail_probe_locked(void){
+    uint64_t now=receiver_now_ms();
+    if(g_rx_reopen) return;
+    if(!g_battery_stop.fail_probed || now-g_battery_stop.fail_probe_at>=BATTERY_STOP_PROBE_MS){
+        if(!g_battery_stop.fail_probed) g_battery_stop.fail_serial=g_a2_serial;   /* reports from here on are newer */
+        g_battery_stop.fail_probed=1; g_battery_stop.fail_probe_at=now;
+        ipc_send_internal("02020008",SEND_PROBE,g_generation);
+    }
+}
+void ipc_battery_stop_fail(void){
+    pthread_mutex_lock(&g_recov_mu);
+    if(g_battery_stop.active){ g_battery_stop.failed=1; battery_fail_probe_locked(); }
+    pthread_mutex_unlock(&g_recov_mu);
+}
+/* Under g_recov_mu, after a failed drain only: a 0201 toggle is admitted as a pause when the newest complete report
+ * shows audio playing, arrived after a probe sent since the failure, arrived quiet after the last stamped frame, and no
+ * toggle was admitted on that same report. A toggle of paused or stopped audio (that would be play), next, previous,
+ * play and seek stay refused; SD admission is untouched. */
+static int battery_pause_admit_locked(const char *frame){
+    if(!g_battery_stop.failed || strcmp(frame,"0201000C0000")) return 0;
+    if(g_rx_reopen || !g_confirmed || g_a2_report.player_generation!=g_generation ||
+       !g_a2_report.player_confirmed || g_a2_report.provisional || g_a2_report.state!=0) return 0;
+    if(!g_battery_stop.fail_probed || g_a2_serial==g_battery_stop.fail_serial) return 0;   /* received since the failure */
+    if(g_battery_stop.paused && g_battery_stop.pause_serial==g_a2_serial) return 0;
+    return battery_quiet_since_locked(g_a2_report_ms);
+}
 unsigned ipc_transport_seq(void){ return g_transport_seq; }
 int ipc_send_cmd(const char*frame){
-    if(!strncmp(frame,"0100",4) || !strncmp(frame,"0103",4) || !strncmp(frame,"0201",4))
-        g_transport_seq++; /* cancel recovery even if the transport send fails */
     /* Capture intent before sending: a toggle of externally playing audio is
      * Pause and must not become a deferred position restore. */
     pthread_mutex_lock(&g_recov_mu);
+    if(g_battery_stop.active && !strcmp(frame,"0806000C0001")){
+        pthread_mutex_lock(&g_mu);
+        uint64_t now=receiver_now_ms();
+        int ok=!battery_stop_check_locked() && g_battery_stop.done &&
+               now>=g_battery_stop.done_at+BATTERY_STOP_SETTLE_MS;
+        if(ok && g_battery_stop.done==BATTERY_DONE_LOCAL){
+            ok=a2_report_stop_proof() &&
+               g_a2_report.state==g_state.state &&
+               g_a2_report.playback_token==g_state.playback_token &&
+               battery_quiet_since_locked(g_a2_report_ms);
+        }
+        int rc=-1;
+        if(ok){
+            pthread_mutex_lock(&g_tx_mu);
+            now=receiver_now_ms();
+            if(!g_transport_wire_have ||
+               now>=g_transport_wire_ms+BATTERY_STOP_QUIET_MS)
+                rc=ipc_send_locked(frame,SEND_USER,g_generation);
+            pthread_mutex_unlock(&g_tx_mu);
+        }
+        pthread_mutex_unlock(&g_mu);
+        pthread_mutex_unlock(&g_recov_mu);
+        return rc;
+    }
+    int pass=0;
+    if(g_battery_stop.active && transport_frame(frame)){
+        pass=battery_pause_admit_locked(frame);
+        if(!pass){
+            if(g_battery_stop.failed) battery_fail_probe_locked();   /* rate limited; judge a later pause on it */
+            pthread_mutex_unlock(&g_recov_mu); return -1;
+        }
+    }
+    if(!strncmp(frame,"0100",4) || !strncmp(frame,"0103",4) || !strncmp(frame,"0201",4))
+        g_transport_seq++; /* cancel recovery even if the transport send fails */
     int pause=g_confirmed && !g_rx_reopen && g_a2_report.player_generation==g_generation &&
               g_a2_report.player_confirmed && !g_a2_report.provisional && g_a2_report.state==0;
-    pthread_mutex_unlock(&g_recov_mu);
-    int rc = ipc_send_internal(frame, SEND_USER, ipc_generation());
+    int rc;
+    if(pass){
+        pthread_mutex_lock(&g_tx_mu);
+        g_battery_pause_pass=1;
+        rc = ipc_send_locked(frame, SEND_USER, g_generation);
+        g_battery_pause_pass=0;
+        pthread_mutex_unlock(&g_tx_mu);
+        if(rc == 0){ g_battery_stop.paused=1; g_battery_stop.pause_serial=g_a2_serial; }
+    } else rc = ipc_send_internal(frame, SEND_USER, g_generation);
     if(rc == 0 && !strcmp(frame,"0201000C0000")){
-        pthread_mutex_lock(&g_recov_mu);
         g_resume_toggle=pause ? 0 : g_transport_seq; g_resume_after_report=g_a2_serial;
-        pthread_mutex_unlock(&g_recov_mu);
     }
+    pthread_mutex_unlock(&g_recov_mu);
     return rc;
 }
 /* background send (state-sync / health probe): silent, never toasts. */
@@ -1478,6 +1801,26 @@ int ipc_send_automatic(const char *frame, unsigned generation){
     }
     pthread_mutex_unlock(&g_recov_mu);
     return r;
+}
+/* Seek that is still owned by the track it was planned for: dispatch re-checks the current track token under
+ * the same lock order as ipc_prepare_send (g_recov_mu -> g_mu), so a newer or unavailable track never receives it. */
+int ipc_seek_if_current(long ms, unsigned generation, uint64_t token){
+    char frame[32];
+    if(ms < 0) ms = 0;
+    snprintf(frame, sizeof frame, "01030010%08lX", (unsigned long)ms);
+    pthread_mutex_lock(&g_recov_mu);
+    pthread_mutex_lock(&g_mu);
+    int rc = IPC_SEND_DEFERRED;
+    if(generation == g_generation && g_confirmed && !g_rx_reopen &&
+       g_local_publication.state == LOCAL_OPEN &&
+       g_state.have_track && g_state.player_confirmed &&
+       !g_state.provisional && !g_state.path_unavailable &&
+       g_state.player_generation == generation &&
+       g_state.playback_token == token)
+        rc = ipc_send_internal(frame, SEND_AUTOMATIC, generation);
+    pthread_mutex_unlock(&g_mu);
+    pthread_mutex_unlock(&g_recov_mu);
+    return rc;
 }
 #ifdef DISKOS_TEST_BT_PREPARE
 int ipc_prepare_snapshot(track_state_t *out, unsigned *serial, unsigned *playing_frames){
@@ -1650,9 +1993,13 @@ ipc_conv_start_status ipc_conv_start(const char *src, unsigned *op){
     g_conv.op = g_conv_ops;
     unsigned id = g_conv.op;
     pthread_mutex_unlock(&g_conv_mu);
-    if(ipc_send_internal(frame, SEND_PROBE, ipc_generation()) != 0){
+    pthread_mutex_lock(&g_recov_mu);
+    int sent = gen == g_generation && g_rx_ready && !g_rx_reopen ?
+        ipc_send_internal(frame, SEND_PROBE, gen) : -1;
+    pthread_mutex_unlock(&g_recov_mu);
+    if(sent != 0){
         pthread_mutex_lock(&g_conv_mu);
-        if(g_conv.op == id && g_conv.state == IPC_CONV_PENDING) g_conv.state = IPC_CONV_IDLE;
+        if(g_conv.op == id) g_conv.state = IPC_CONV_IDLE;
         pthread_mutex_unlock(&g_conv_mu);
         return IPC_CONV_START_SEND;
     }

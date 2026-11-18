@@ -44,13 +44,18 @@ const char *power_temp_msg(int state){
 
 int power_charging_decide(int report, long current_now){
     if(report == 0 || report == 1) return report;
-    return current_now < 0 ? -1 : current_now > 0;
+    return current_now == POWER_CURRENT_UNREADABLE ? -1 : current_now > 0;
+}
+int power_battery_charging_decide(int state, long current_now){
+    if(current_now == POWER_CURRENT_UNREADABLE) return -1;
+    return current_now > 0 ? 1 : state;   /* zero or a negative (discharging) reading: the report state decides */
 }
 
 int power_read_sysconfig(const char *db_path, const char *column){
     const char *sql = NULL;
     if(column && !strcmp(column, "POWER_SAVE")) sql = "SELECT POWER_SAVE FROM SYSCONFIG WHERE ID=1;";
     else if(column && !strcmp(column, "CHARGE_PROTECT")) sql = "SELECT CHARGE_PROTECT FROM SYSCONFIG WHERE ID=1;";
+    else if(column && !strcmp(column, "PLAY_GAP")) sql = "SELECT PLAY_GAP FROM SYSCONFIG WHERE ID=1;";
     if(!sql || !db_path) return -1;
     sqlite3 *c = NULL; int v = -1;
     if(sqlite3_open_v2(db_path, &c, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK){
@@ -66,6 +71,47 @@ int power_read_sysconfig(const char *db_path, const char *column){
     }
     if(c) sqlite3_close(c);
     return v;
+}
+
+/* ---- battery policy (no LVGL or device I/O) ---- */
+int power_battery_sample(pw_battery_t *s, uint32_t now, int cap, int charging){
+    if(cap < 0 || cap > 100 || (charging != 0 && charging != 1)){
+        s->counting = s->fired = 0;
+        return 0;
+    }
+    s->sampled = now;
+    if(cap > 0 || charging){ s->counting = s->fired = 0; }
+    if(cap <= 98){ s->full = 0; if(!charging) s->charging_seen = 0; }
+    if(charging){
+        s->charging_seen = 1;
+        if(cap >= 12) s->warned &= ~PW_BAT_LOW10;
+        if(cap >= 7) s->warned &= ~PW_BAT_LOW5;
+    }
+    if(cap == 100 && s->charging_seen && !s->full){ s->full = 1; return PW_BAT_FULL; }
+    if(charging) return 0;
+    if(cap == 0){
+        s->warned |= PW_BAT_LOW10 | PW_BAT_LOW5;
+        if(!s->counting && !s->fired){ s->counting = 1; s->started = now; }
+        return 0;
+    }
+    if(cap <= 5){
+        unsigned was = s->warned;
+        s->warned |= PW_BAT_LOW10 | PW_BAT_LOW5;
+        return (was & PW_BAT_LOW5) ? 0 : PW_BAT_LOW5;
+    }
+    if(cap <= 10 && !(s->warned & PW_BAT_LOW10)){ s->warned |= PW_BAT_LOW10; return PW_BAT_LOW10; }
+    return 0;
+}
+int power_battery_seconds(const pw_battery_t *s, uint32_t now){
+    uint32_t elapsed = now - s->started;
+    return !s->counting || elapsed >= 30000u ? 0 : (int)((30000u - elapsed + 999u) / 1000u);
+}
+int power_battery_due(pw_battery_t *s, uint32_t now, int immediate){
+    if(!s->counting) return 0;
+    if(now - s->sampled > 6000u){ s->counting = s->fired = 0; return 0; }
+    if(!immediate && now - s->started < 30000u) return 0;
+    s->counting = 0; s->fired = 1;
+    return 1;
 }
 
 /* ---- idle power-off run by diskOS ---- */
@@ -115,13 +161,23 @@ pw_sleep_act_t power_sleep_decide(uint32_t armed_ms, uint32_t elapsed_ms, int gu
 
 /* ---- SD-safe shutdown -------------------------------------------------------------------------------------------- */
 /* Same order as the Restart action: close SD admission, wait for every admitted writer, a full `sync` that must
- * succeed - and only then tell the player to power off. Any failure reopens the card and says so; nothing is powered off
- * after a failed step. The player's own power-off routine kills mq_ui and calls `poweroff -f` with no sync of its own, so
- * this sequence is what makes the card safe. */
-static struct { power_ops_t ops; pw_phase_t phase; uint32_t t0; int cancel_sent; } g_pw;
+ * succeed - and only then tell the player to power off. A requested shutdown that fails reopens the card and says so (or,
+ * once handed off, keeps it closed); nothing is powered off after a failed step. A shutdown the player announced itself
+ * (aa03) cannot be stopped: a failure there leaves the card closed and nothing reopens it until the player restarts. That
+ * path is best effort: it closes admission and starts a flush, but cannot prove that every worker
+ * or the flush has finished before the player kills the UI. */
+static struct { power_ops_t ops; pw_phase_t phase; uint32_t t0; int cancel_sent; int announced; int keep_closed; } g_pw;
+static unsigned g_ann_gen; static int g_ann_set;   /* the player generation power_shutdown_announced last acted for */
 
 static uint32_t pw_elapsed(void){ return g_pw.ops.now_ms(g_pw.ops.ctx) - g_pw.t0; }
 static void pw_fail(const char *msg){
+    if(g_pw.announced){
+        /* The player is powering off on its own and nothing can stop it: never reopen the card, send no cancel (there is none
+         * to send). The card stays closed until the player restarts or the Disc goes down. */
+        g_pw.cancel_sent = 1;
+        g_pw.phase = PW_PROTECTED; g_pw.t0 = g_pw.ops.now_ms(g_pw.ops.ctx);
+        return;
+    }
     if(g_pw.phase == PW_HANDOFF){
         /* Take the player's timer back. 0806 does not persist and has no read-back, and a queued frame proves nothing, so
          * the cancel can never be confirmed: keep the card CLOSED (a stock power-off may still be pending) until the player
@@ -131,15 +187,25 @@ static void pw_fail(const char *msg){
         g_pw.ops.toast(g_pw.ops.ctx, "Shutdown didn't complete - restart the Disc to use the card");
         return;
     }
+    if(g_pw.keep_closed){
+        /* Empty battery: do not admit fresh card writes after a failed drain/flush. No timer was sent. Audio may still
+         * be playing, so the user may pause it (ops.failed); play stays refused. */
+        if(g_pw.ops.failed) g_pw.ops.failed(g_pw.ops.ctx);
+        g_pw.cancel_sent = 1;
+        g_pw.phase = PW_PROTECTED; g_pw.t0 = g_pw.ops.now_ms(g_pw.ops.ctx);
+        g_pw.ops.toast(g_pw.ops.ctx, "Shutdown didn't complete - restart the Disc to use the card");
+        return;
+    }
     g_pw.ops.quiesce_end(g_pw.ops.ctx);
     g_pw.phase = PW_OFF;
+    power_idle_reset();
     g_pw.ops.toast(g_pw.ops.ctx, msg);
 }
 int power_shutdown_begin(const power_ops_t *o){
     if(g_pw.phase != PW_OFF) return -1;
     if(!o || !o->quiesce_begin || !o->drained || !o->quiesce_end || !o->sync_start || !o->sync_poll || !o->sync_kill ||
        !o->send || !o->now_ms || !o->toast) return -1;
-    g_pw.ops = *o;
+    g_pw.ops = *o; g_pw.announced = 0; g_pw.cancel_sent = 0; g_pw.keep_closed = 0;
     g_pw.ops.quiesce_begin(g_pw.ops.ctx);
     g_pw.phase = PW_DRAIN;
     g_pw.t0 = g_pw.ops.now_ms(g_pw.ops.ctx);
@@ -148,15 +214,37 @@ int power_shutdown_begin(const power_ops_t *o){
 }
 pw_phase_t power_shutdown_phase(void){ return g_pw.phase; }
 void power_shutdown_new_generation(void){
-    if(g_pw.phase != PW_PROTECTED) return;
+    if(g_pw.phase != PW_PROTECTED &&
+       !(g_pw.announced && g_pw.phase != PW_OFF)) return;
+    if(g_pw.phase == PW_SYNC)
+        g_pw.ops.sync_kill(g_pw.ops.ctx);
     g_pw.ops.quiesce_end(g_pw.ops.ctx);
     g_pw.phase = PW_OFF;
+    g_pw.announced = 0;
+    g_pw.cancel_sent = 0;
+    power_idle_reset();
+}
+int power_shutdown_announced(const power_ops_t *o, unsigned gen){
+    if(g_ann_set && g_ann_gen == gen) return 0;      /* once per player generation */
+    if(g_pw.phase != PW_OFF){
+        /* a shutdown is already running (or has failed closed): join it, never start a second one */
+        g_ann_gen = gen; g_ann_set = 1;
+        g_pw.announced = 1;
+        if(g_pw.phase == PW_PROTECTED) g_pw.cancel_sent = 1;   /* the player is powering off for real: stop retrying the cancel */
+        if(g_pw.ops.end_beams) g_pw.ops.end_beams(g_pw.ops.ctx);
+        return 0;
+    }
+    if(power_shutdown_begin(o) != 0) return -1;     /* quiesce_begin has run: admission is closed before anything else */
+    g_ann_gen = gen; g_ann_set = 1;
+    g_pw.announced = 1;
+    if(g_pw.ops.end_beams) g_pw.ops.end_beams(g_pw.ops.ctx);
+    return 1;
 }
 pw_phase_t power_shutdown_tick(void){
     switch(g_pw.phase){
     case PW_OFF: break;
     case PW_DRAIN:
-        if(g_pw.ops.drained(g_pw.ops.ctx)){
+        if(g_pw.ops.drained(g_pw.ops.ctx) || (g_pw.announced && pw_elapsed() >= POWER_ANNOUNCE_DRAIN_MS)){
             if(g_pw.ops.sync_start(g_pw.ops.ctx) != 0){ pw_fail("Couldn't shut down - try again"); break; }
             g_pw.phase = PW_SYNC; g_pw.t0 = g_pw.ops.now_ms(g_pw.ops.ctx);
         } else if(pw_elapsed() >= POWER_DRAIN_MS) pw_fail("Couldn't shut down - card busy, it reopens when free");
@@ -164,7 +252,9 @@ pw_phase_t power_shutdown_tick(void){
     case PW_SYNC: {
         int r = g_pw.ops.sync_poll(g_pw.ops.ctx);
         if(r < 0){ pw_fail("Couldn't shut down - card flush failed"); break; }
-        if(r == 1){
+        if(r == 1 && g_pw.announced){   /* the player already powers off: no 0806, just wait for it (a failure keeps the card closed) */
+            g_pw.phase = PW_HANDOFF; g_pw.t0 = g_pw.ops.now_ms(g_pw.ops.ctx);
+        } else if(r == 1){
             /* 0806 is the stock sleep timer: 1 s should make the player run its own power-off routine within about 2 s.
              * UNVERIFIED: the player resets that counter every second while a separate state word equals 1
              * (mq_player_257.dis 0x4f4558-0x4f4560, 0x4f46a4); its meaning is not identified. The hand-off timeout below
@@ -195,12 +285,15 @@ pw_phase_t power_shutdown_tick(void){
 #include "scanner.h"
 #include "shutdown_anim.h"
 #include "system.h"
+#include "ui_dialog.h"
+#include "theme_kit.h"
+#include "i18n.h"
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
 #include <sys/wait.h>
 
-void ui_sd_quiesce_begin(void); int ui_sd_quiesce_drained(void); void ui_sd_quiesce_end(void);   /* main.c */
+void ui_sd_quiesce_begin(void); int ui_sd_quiesce_drained(void); void ui_sd_quiesce_end(void); void ui_power_beams_end(void);   /* main.c */
 
 #define POWER_SYSCONFIG "/usr/data/fiio/db/sysconfig.db"
 
@@ -208,9 +301,9 @@ int power_supported(void){ return fw_os_ver() == 257; }
 int power_apply_charge(int on){ return power_supported() ? power_apply_charge_via(ipc_send_cmd, on) : -1; }
 int power_charging(long *current_now, int *report){
     int r = ipc_charge_snapshot(NULL);
-    long cur = -1;
+    long cur = POWER_CURRENT_UNREADABLE;
     FILE *f = fopen("/sys/class/power_supply/cw221X-bat/current_now", "r");
-    if(f){ if(fscanf(f, "%ld", &cur) != 1) cur = -1; fclose(f); }
+    if(f){ if(fscanf(f, "%ld", &cur) != 1) cur = POWER_CURRENT_UNREADABLE; fclose(f); }
     if(current_now) *current_now = cur;
     if(report) *report = r;
     return power_charging_decide(r, cur);
@@ -247,6 +340,10 @@ static int idle_request(void){
 }
 void power_note_input(void){ g_key_ms = lv_tick_get(); g_have_key = 1; }
 void power_startup_mirror(void){
+    if(cfg_get_int("gapless", -1) < 0){   /* adopt stock once; never replace a saved diskOS choice */
+        int gap = power_read_sysconfig(POWER_SYSCONFIG, "PLAY_GAP");
+        if(gap == 0 || gap == 1) cfg_set_int("gapless", gap);
+    }
     if(!power_supported()) return;
     idle_takeover();
     int c = power_read_sysconfig(POWER_SYSCONFIG, "CHARGE_PROTECT");
@@ -278,13 +375,25 @@ static void real_sync_kill(void *c){
 }
 static int  real_send(void *c, const char *f){ (void)c; return ipc_send_cmd(f); }
 static uint32_t real_now(void *c){ (void)c; return lv_tick_get(); }
-static void real_toast(void *c, const char *m){ (void)c; ui_toast(m); }
+static int g_restart_notice_pending;
+static const char g_restart_notice[]=
+    "Shutdown didn't complete - restart the Disc to use the card";
+
+static void real_toast(void *c, const char *m){
+    (void)c;
+    if(!strcmp(m,g_restart_notice)){
+        g_restart_notice_pending=!ui_screen_backlight_on();
+        if(g_restart_notice_pending) return;
+    }
+    ui_toast(m);
+}
+static void real_end_beams(void *c){ (void)c; ui_power_beams_end(); }
 
 int power_shutdown_request(void){
-    if(!power_supported()){ ui_toast("Not available on this firmware"); return -1; }
-    if(power_shutdown_phase() == PW_PROTECTED){ ui_toast("Shutdown didn't complete - restart the Disc to use the card"); return -1; }
+    if(!power_supported()){ ui_toast(tr("Not available on this firmware")); return -1; }
+    if(power_shutdown_phase() == PW_PROTECTED){ ui_toast(tr("Shutdown didn't complete - restart the Disc to use the card")); return -1; }
     power_ops_t o = { real_quiesce_begin, real_drained, real_quiesce_end, real_sync_start, real_sync_poll, real_sync_kill,
-                      real_send, real_now, real_toast, NULL };
+                      real_send, real_now, real_toast, NULL, real_end_beams };
     return power_shutdown_request_with(&o, ui_screen_backlight_on());
 }
 /* The closing animation (shutdown_anim.c) only observes: it starts after the SD-safe sequence has begun, and is then fed the
@@ -295,6 +404,150 @@ int power_shutdown_request_with(const power_ops_t *o, int screen_lit){
     return r;
 }
 
+/* Battery shutdown alone adds a playback drain; the power-key announcement path is unchanged. */
+int power_battery_shutdown_with(const power_ops_t *o, int screen_lit){
+    int r = power_shutdown_request_with(o, screen_lit);
+    if(r == 0){
+        g_pw.keep_closed = 1;
+        if(o->end_beams) o->end_beams(o->ctx);
+    }
+    return r;
+}
+static void battery_quiesce(void *c){
+    real_quiesce_begin(c);
+    ipc_battery_stop_begin();
+}
+static int battery_drained(void *c){
+    return ipc_battery_stop_poll() && ui_cast_phase() == 0 && real_drained(c);
+}
+static void battery_quiesce_end(void *c){
+    ipc_battery_stop_end();
+    real_quiesce_end(c);
+}
+static void battery_failed(void *c){ (void)c; ipc_battery_stop_fail(); }
+/* The proven stop must still hold at every sync poll, right up to the one that lets the core send 0806: a failed hold
+ * is a failed step (pw_fail keep_closed: PW_PROTECTED, battery_failed, no 0806). While the stop is younger than the
+ * settle delay the sync result is not read, so 0806 waits; the sync keeps running. */
+static int battery_sync_poll(void *c){
+    if(g_pw.announced) return real_sync_poll(c);   /* the player is powering off on its own: nothing to hold, just flush */
+    int held = ipc_battery_stop_holds();
+    if(held < 0){ (void)real_sync_poll(c); return -1; }   /* reap a finished flush; a running one is left alone */
+    if(held == 0) return 0;
+    return real_sync_poll(c);
+}
+static int battery_supported(void){
+    /* 0806 is mapped for these two versions; other battery notices need no backend. */
+    int v = fw_os_ver();
+    return v == 240 || v == 257;
+}
+static int battery_request(void){
+    /* 0806 callback: P240 table 0x82d2e0 -> 0x413910 -> 0x4e8628 (seconds at 0x82e9ac);
+     * P257 table 0x838c40 -> 0x415100 -> 0x4f1800. Only battery shutdown extends to V2.40. */
+    if(!battery_supported()) return -1;
+    power_ops_t o = { battery_quiesce, battery_drained, battery_quiesce_end, real_sync_start, battery_sync_poll, real_sync_kill,
+                      real_send, real_now, real_toast, NULL, real_end_beams, battery_failed };
+    return power_battery_shutdown_with(&o, ui_screen_backlight_on());
+}
+
+static pw_battery_t g_battery;
+static ui_dialog_t g_battery_dialog;
+static lv_obj_t *g_battery_body;
+static int g_battery_seconds = -1;
+static void battery_dialog_close(void){
+    if(g_battery_dialog.scrim) lv_obj_delete(g_battery_dialog.scrim);
+    memset(&g_battery_dialog, 0, sizeof g_battery_dialog);
+    g_battery_body = NULL; g_battery_seconds = -1;
+}
+int power_battery_capacity(void){
+    int capacity = -1; char buf[32], *end;
+    FILE *f = fopen("/sys/class/power_supply/cw221X-bat/capacity", "r");
+    if(!f) return -1;
+    if(fgets(buf, sizeof buf, f)){
+        long n = strtol(buf, &end, 10);
+        if(end != buf && (*end == '\n' || *end == 0) && n >= 0 && n <= 100) capacity = (int)n;
+    }
+    fclose(f);
+    return capacity;
+}
+static int battery_charging_now(void){
+    long cur = POWER_CURRENT_UNREADABLE;
+    int state = power_charging(&cur, NULL);
+    return power_battery_charging_decide(state, cur);
+}
+static void battery_finish(int immediate){
+    if(g_battery.counting && (immediate || power_battery_seconds(&g_battery, lv_tick_get()) == 0))
+        power_battery_observe(power_battery_capacity(), battery_charging_now());
+    if(power_battery_due(&g_battery, lv_tick_get(), immediate)){
+        battery_dialog_close();
+        if(battery_request() != 0){   /* retry after a new full countdown, never a fast request loop */
+            g_battery.fired = 0; g_battery.counting = 1; g_battery.started = lv_tick_get();
+        }
+    }
+}
+static void battery_off_now(lv_event_t *e){
+    (void)e;
+    battery_finish(1);
+}
+void power_battery_observe(int capacity, int charging){
+    if(power_shutdown_phase() != PW_OFF){ g_battery.counting = 0; battery_dialog_close(); return; }
+    g_battery.fired = 0; /* a failed-closed shutdown recovered to PW_OFF; retain warning latches */
+    int notice = power_battery_sample(&g_battery, lv_tick_get(), capacity, charging);
+    if(!battery_supported()) g_battery.counting = 0;
+    if(!g_battery.counting) battery_dialog_close();
+    if(notice == PW_BAT_LOW10) ui_toast(tr("Battery low - 10%. Charge soon."));
+    if(notice == PW_BAT_LOW5) ui_toast(tr("Battery low - 5%. Charge soon."));
+    if(notice == PW_BAT_FULL) ui_toast(tr("Battery fully charged"));
+}
+void power_battery_tick(void){
+    if(power_shutdown_phase()!=PW_PROTECTED)
+        g_restart_notice_pending=0;
+    else if(g_restart_notice_pending && ui_screen_backlight_on()){
+        ui_toast(g_restart_notice);
+        g_restart_notice_pending=0;
+    }
+    if(power_shutdown_phase() != PW_OFF){ g_battery.counting = 0; battery_dialog_close(); return; }
+    if(!battery_supported()){ g_battery.counting = 0; battery_dialog_close(); return; }
+    battery_finish(0);
+    if(!g_battery.counting){ battery_dialog_close(); return; }
+    if(!g_battery_dialog.scrim){
+        ui_dialog_cfg_t cfg = { .width = 296, .margin = 4, .scrim = 1, .actions = 1, .fit_width = 1 };
+        g_battery_dialog = ui_dialog_create(lv_layer_top(), &cfg);
+        lv_obj_t *title = ui_dialog_label(&g_battery_dialog, tr("Battery empty"));
+        lv_obj_set_style_text_font(title, TF(UI_16), 0);
+        lv_obj_set_style_text_color(title, TC(TEXT_PRIMARY), 0);
+        g_battery_body = ui_dialog_label(&g_battery_dialog, "");
+        lv_obj_set_style_text_font(g_battery_body, TF(UI_14), 0);
+        lv_obj_set_style_text_color(g_battery_body, theme_color(THEME_CLR_TEXT_MUTED), 0);
+        ui_dialog_button(&g_battery_dialog, tr("Turn off now"), THEME_CLR_ACCENT_EMPHASIS, battery_off_now, "battery.off_now");
+    }
+    int secs = power_battery_seconds(&g_battery, lv_tick_get());
+    if(secs != g_battery_seconds){
+        char body[120];
+        snprintf(body, sizeof body, tr("The Disc turns off in %d s to keep your music card safe."), secs);
+        lv_label_set_text(g_battery_body, body);
+        g_battery_seconds = secs;
+        ui_dialog_finalize(&g_battery_dialog);
+    }
+}
+
+/* Works on every firmware that sends aa03 (the 0806 hand-off is not used), so it is not gated on power_supported(). */
+int power_shutdown_announced_with(const power_ops_t *o, int screen_lit, unsigned gen){
+    int r = power_shutdown_announced(o, gen);
+    if(r == 1) shutdown_anim_start(screen_lit);
+    return r;
+}
+void power_poll_player_poweroff(void){
+    static unsigned seen_gen, seen_n; static int have;
+    unsigned gen, n = ipc_poweroff_announced(&gen);
+    if(have && gen != seen_gen) power_shutdown_new_generation();
+    if(have && gen == seen_gen && n == seen_n) return;   /* nothing new */
+    if(n == 0){ seen_gen = gen; seen_n = 0; have = 1; return; }
+    power_ops_t o = { real_quiesce_begin, real_drained, real_quiesce_end, real_sync_start, real_sync_poll, real_sync_kill,
+                      real_send, real_now, real_toast, NULL, real_end_beams };
+    if(power_shutdown_announced_with(&o, ui_screen_backlight_on(), gen) < 0) return;   /* incomplete ops: retry next pass */
+    seen_gen = gen; seen_n = n; have = 1;
+}
+
 static int read_temp_tenths(int *out){
     FILE *f = fopen("/sys/class/power_supply/cw221X-bat/temp", "r");
     if(!f) return -1;
@@ -303,12 +556,11 @@ static int read_temp_tenths(int *out){
     if(!ok) return -1;
     *out = t; return 0;
 }
+static uint32_t g_power_next;
+uint32_t power_next_deadline(void){return g_power_next;}
 void power_tick(uint32_t last_input_ms, int playing){
     static uint32_t last; static int have_last, temp_state;
     power_shutdown_tick();
-    { static unsigned pg; static int pg_set; unsigned g = ipc_generation();
-      if(pg_set && g != pg) power_shutdown_new_generation();   /* the player restarted: a pending stock power-off is gone */
-      pg = g; pg_set = 1; }
     uint32_t now = lv_tick_get();
     int receiver_mode = ipc_player_mode();
     static uint32_t usb_last;
@@ -336,6 +588,15 @@ void power_tick(uint32_t last_input_ms, int playing){
          * the player reports either receiver mode, or USB is observed, selected or reported. */
         if(power_shutdown_phase() == PW_OFF && g_take_ok)   /* never before the player's own idle power-off is confirmed off */
             power_idle_tick(now, (uint32_t)power_idle_secs(cfg_get_int("idle_off_idx", 0)), power_idle_playing(playing), last_input_ms, idle_request);
+    }
+    /* The owning loop must not infer these deadlines from another poll. */
+    g_power_next=usb_last+1000u;
+    uint32_t temperature=have_last && now-last<5000u ? last+5000u : now+5000u;
+    if((int32_t)(temperature-g_power_next)<0)g_power_next=temperature;
+    int secs=power_idle_secs(cfg_get_int("idle_off_idx",0));
+    if(power_shutdown_phase()==PW_OFF && g_take_ok && g_idle.started && !g_idle.fired && secs>0 && !power_idle_playing(playing)){
+        uint32_t expiry=g_idle.since+(uint32_t)secs*1000u;
+        if((int32_t)(expiry-g_power_next)<0)g_power_next=expiry;
     }
     if(have_last && now - last < 5000u) return;
     last = now; have_last = 1;

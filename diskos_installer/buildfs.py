@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Opt-in filesystem interface for shared builder edits. No dispatch changes.
 
 Paths are canonical relative bytes (b'/' denotes the root). Archive creation

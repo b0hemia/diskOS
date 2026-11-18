@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Run real Homebrew pin and compile checks offline, without running the build."""
 import os
 from pathlib import Path

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # Offline Windows x86_64 native tools. Retain the workspace for build evidence.
 set -euo pipefail
 trap 'echo "FAIL: build-windows-tools.sh line $LINENO" >&2' ERR

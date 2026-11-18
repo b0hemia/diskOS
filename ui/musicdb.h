@@ -2,6 +2,7 @@
 /* Copyright (C) 2026 diskOS contributors */
 #ifndef MUSICDB_H
 #define MUSICDB_H
+#include "track_path.h"
 
 #define MDB_MAX_SONGS   1500
 #define MDB_MAX_GROUPS  600
@@ -89,6 +90,7 @@ int  mdb_artist_plan(const char *key, mdb_plan_t *plan);                        
 #define MDB_SCOPE_ARTIST 1
 #define MDB_SCOPE_GENRE  2
 int  mdb_scope_albums(int kind, const char *key, char names[][MDB_STR], char artists[][MDB_STR], int *counts, int cap);   /* distinct non-empty albums in scope, by name; returns the FULL count (rows written up to cap; artists/counts optional) */
+int  mdb_scope_albums_buckets(int kind, const char *key, char names[][MDB_STR], char artists[][MDB_STR], int *counts, int cap, char *buckets); /* same rows/count; optional effective A-Z buckets */
 int  mdb_scope_album_songs(int kind, const char *key, const char *album, const mdb_song_t **out, int cap);  /* that album's songs in scope, player album order; returns the rows written (<= cap; out NULL = full count) */
 int  mdb_scope_album_plan(int kind, const char *key, const char *album, mdb_plan_t *plan);   /* type 7 (artist) / 8 (genre) when exact, else 5; 1 = built (caller frees) */
 static inline int mdb_id_cmp(const void *a, const void *b){
@@ -111,7 +113,7 @@ typedef struct {
     int  dur_ms;
     char title[MDB_STR];     /* TITLE, else the file NAME */
     char artist[MDB_STR];
-    char path[256];
+    char path[TRACK_PATH_MAX];
 } mdb_qrow_t;
 #define MDB_UPNEXT_EMPTY    0      /* the queue is empty */
 #define MDB_UPNEXT_ERROR    (-1)   /* the queue can't be read (DB error) */
@@ -148,7 +150,7 @@ typedef struct {
     char title[MDB_STR];     /* TITLE, else NAME, else the file name */
     char artist[MDB_STR];
     char album[MDB_STR];
-    char path[256];
+    char path[TRACK_PATH_MAX];
 } mdb_srow_t;
 int  mdb_list_song_ids(int list_type, const char *name, int *ids, int cap);
 int  mdb_song_rows(const int *ids, int n, mdb_srow_t *out, unsigned char *flags);
@@ -167,8 +169,8 @@ int  mdb_artist_mode(void);
 int  mdb_artist_missing(const char *key);                    /* NULL, empty or ASCII whitespace only */
 int  mdb_album_rep_ids(int *out, int cap);                    /* per album (mdb_albums order): its first song's ID */
 int  mdb_album_count(void);                                  /* distinct album count (for dynamic buffer sizing) */
-/* Distinct artists, with comma-separated artists split so a collab shows under
- * each individual name. */
+/* Distinct artists; comma, semicolon and bounded featured credits share one
+ * iterator with counting and membership. Album Artist keys stay unsplit. */
 /* Empty key = one missing row. Display "Unknown artist" without changing its lookup key. */
 int  mdb_artists(char names[][MDB_STR], int cap);
 
@@ -177,7 +179,7 @@ typedef struct {
     int  id;                    /* SONG.ID of the book file */
     char title[MDB_STR];
     char author[MDB_STR];
-    char path[512];             /* the .m4b file (also the book key) */
+    char path[TRACK_PATH_MAX];  /* the .m4b file (also the book key) */
     long position_ms;           /* saved resume position (0 if none) */
     int  completed;
 } book_t;
@@ -191,6 +193,10 @@ int  mdb_reserved_slot_set(const char *path);  /* set the reserved list_type-5 s
 int  mdb_reserved_slot_set_playlist(long pid);  /* set the reserved slot (seq 0) to a user playlist's members for isolated playlist playback; returns member count, 0=fail/empty */
 int  mdb_reserved_slot_player_pos(long pid, int row);   /* player's slot position of display row `row` (1-based); 0 = unknown */
 int  mdb_migrate_books(void);                   /* move any .m4b out of music stores into BOOKS; 1=clean/done, 0=failed (retry) */
+char mdb_browse_bucket(int kind, const char *name); /* 1 artist in current mode, 2 album; shared by list/wall */
+char mdb_album_bucket(int row); /* Albums/Album Wall row, in mdb_albums order */
+char mdb_scope_album_bucket(int kind, const char *key, const char *album);
+int  mdb_sort_rescan_needed(void); /* maintenance only; never starts a scan */
 int  mdb_artist_count(void);   /* distinct tokenized artist count (for sizing the caller's buffer) */
 /* Distinct genres/tags (with track count). */
 int  mdb_genre_count(void);
@@ -236,6 +242,15 @@ int  mdb_playlist_rename(long pid, const char *name);
 int  mdb_playlist_delete(long pid);
 long mdb_book_scope_set(const char *path);   /* point the reserved single-book playlist at path; returns its id (0 fail) */
 int  mdb_playlist_export(long pid, const char *name, char *outname, int cap);   /* write /tmp/sdcard/<name>.m3u; 1=ok */
+typedef struct {
+    char title[MDB_STR], artist[MDB_STR];
+    int dur_ms;
+    long long occurrence;
+} mdb_playlist_display_t;
+/* Owned compact display snapshot. -1 keeps the old view on read/allocation failure. */
+int mdb_playlist_display(long pid, mdb_playlist_display_t **out);
+int mdb_playlist_occurrence_pos(long pid, long long occurrence);
+int mdb_playlist_remove_occurrence(long pid, long long occurrence);
 int  mdb_playlist_songs(long pid, mdb_song_t *out, int cap);
 int  mdb_playlist_count(long pid);
 /* scan a dir for *.m3u / *.m3u8 and import each new one as a playlist; returns # imported */
@@ -261,8 +276,16 @@ int  mdb_set_peq(int style_preset, double master_gain, const char *params_json);
 int  mdb_get_peq(int style_preset, int *master_out, int *gains_out);   /* 1=found, 0=no slot (flat is real), -1=read FAILED */
 int  mdb_peq_is_graphic(int style_preset);   /* 1=graphic-editable (or empty), 0=parametric (don't overwrite), -1=read failed */
 
+/* Complete validated V2.57 graphic row; 1=valid, 0=protected/missing, -1=read failed.
+ * Q is retained verbatim; positions and frequencies must match the graphic layout. */
+typedef struct { int master, gains[10]; char q[10][5]; } mdb_peq_snapshot;
+int mdb_get_peq_snapshot(int slot, mdb_peq_snapshot *out);
+int mdb_peq_selected(void);   /* fresh SYSCONFIG.EQ_TYPE; -1 unreadable */
+
 int  mdb_sysconfig_folder_jump(void);
 int  mdb_sysconfig_language(void);          /* SYSCONFIG.LANGUAGE (0..), -1 unreadable */        /* SYSCONFIG.FOLDER_JUMP (0687): 0/1, -1 unreadable */
 int  mdb_sysconfig_auto_time(void);          /* SYSCONFIG.AUTO_TIME: 0/1, -1 unreadable (player reads it at start) */
 int  mdb_sysconfig_set_auto_time(int on);    /* 0 = written + read back, -1 = not */
+/* Worker-only bounded active-album artwork paths, through an independent reader. */
+int mdb_art_nearby(const char *track, int pos, int mode, char paths[][TRACK_PATH_MAX], int cap);
 #endif

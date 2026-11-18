@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """The Windows tools recipe refuses delay imports before publishing a bundle."""
 import os
 from pathlib import Path

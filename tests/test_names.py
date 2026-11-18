@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Boot-only network naming: real native helpers and real init/launch fragments."""
 import hashlib
 import os

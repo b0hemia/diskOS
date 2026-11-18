@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Fixed, elevated, one-instance in-box binding prototype. No command-line options. */
 #include <stddef.h>
 #ifdef BIND_MOCK

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+#include "ui_wake.h"
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -22,25 +23,35 @@ static const char intent_defaults[]="v1\nstage=defaults\n";
 static const char intent_settings[]="v1\nstage=settings\n";
 static _Thread_local int on_worker;
 static _Thread_local int removal_pending;
+/* Why the last nr_recover returned pending: at the aliases stage (with the
+ * radio off that is the only wait) or waiting for the UI settings ack. */
+static _Thread_local int at_aliases, awaiting_ack;
 static int settings_step(void);
 static void settings_begin(void);
 static const char intent_aliases[]="v1\nstage=aliases\n";
 int nr_recover(int radio_on, int create){
+    at_aliases=awaiting_ack=0;
+    /* A new reset settles an uncertain removal with its own durable intent. */
     if(removal_pending){
-        if(dn_remove(DN_INTENT)!=DN_OK) return 1;
-        removal_pending=0;
-        if(!create) return 0;
+        if(!create){
+            if(dn_remove(DN_INTENT)!=DN_OK) return 1;
+            removal_pending=0; return 0;
+        }
     }
     char b[64]; size_t n; int r=dn_read_file(DN_INTENT,b,sizeof b,&n);
     if(r==1 && !create) return 0;
-    if(r==1){
+    if(create){
+        /* A new reset restarts at defaults even over a pending stage: the
+         * user may have changed settings since the earlier attempt. */
         if(on_worker) settings_begin();
         r=dn_replace(DN_INTENT,intent_defaults,sizeof intent_defaults-1);
+        if(r!=DN_FAILED) removal_pending=0;
         /* An uncertain intent may exist: changing anything waits for a later
          * successful durable replacement, and new names remain blocked. */
         if(r) return r==DN_UNCERTAIN ? 1 : -1;
         strcpy(b,intent_defaults);
     } else if(r || (strcmp(b,intent_defaults) && strcmp(b,intent_settings) && strcmp(b,intent_aliases))) return 1;
+    at_aliases=!strcmp(b,intent_aliases);
     if(!radio_on && !strcmp(b,intent_aliases)) return 1;
     /* Recommit even a recovered record before proceeding. A process restart
      * alone cannot prove the directory fsync of the previous writer succeeded. */
@@ -53,6 +64,7 @@ int nr_recover(int radio_on, int create){
     if(!strcmp(b,intent_settings)){
         if(settings_step()) return 1;
         if(dn_replace(DN_INTENT,intent_aliases,sizeof intent_aliases-1)) return 1;
+        at_aliases=1;
     }
     if(!radio_on) return 1;
     char actual[DN_BT_BYTES+1];
@@ -102,7 +114,8 @@ static int settings_step(void){
     } else if(!owner.settings_state && owner.settings_serial!=UINT64_MAX){
         owner.view.settings_request=++owner.settings_serial; owner.settings_state=1;
     }
-    pthread_mutex_unlock(&owner.mu); return result;
+    awaiting_ack=owner.settings_state==1;
+    pthread_mutex_unlock(&owner.mu); ui_notify(UI_WAKE_NAMES); return result;
 }
 void nr_settings_complete(uint64_t request,int result){
     pthread_mutex_lock(&owner.mu);
@@ -159,6 +172,7 @@ static int reconcile(int radio, const dn_snapshot *s){
 static void *run(void *unused){
     (void)unused; on_worker=1;
     watch w={0,-1}; unsigned backoff=1; int64_t retry=0, monitor_retry=0;
+    uint64_t reset_id=0; int reset_result=0; /* accepted reset not yet reported */
     for(;;){
         pthread_mutex_lock(&owner.mu);
         int radio=owner.radio, hint=owner.hint; owner.hint=0;
@@ -175,7 +189,7 @@ static void *run(void *unused){
             if(kind==NR_NETWORK) result=dn_save_network(value);
             else if(kind==NR_BLUETOOTH) result=dn_save_bt(value);
             else if(kind==NR_PAIRED) result=radio && btalias_set(mac,value,1500)==BTALIAS_OK ? 0 : -1;
-            else result=nr_recover(radio,1);
+            else { reset_id=id; reset_result=nr_recover(radio,1); } /* replaces an unreported reset */
             retry=0;
         }
         pthread_mutex_lock(&owner.mu);
@@ -183,17 +197,26 @@ static void *run(void *unused){
         pthread_mutex_unlock(&owner.mu);
         if(need){
         int pending=nr_recover(radio,0);
-        if(queued && kind==NR_RESET && result>=0 && !pending) result=0;
+        /* A reset reports once only its own remaining work is left. It waits
+         * while the UI owes the settings acknowledgement, but an early read or
+         * recommit failure clears awaiting_ack with a settings request still
+         * posted, so a pending result can be published before that ack.
+         * poll_names handles the posted request before the result. */
+        int settle=reset_id && (reset_result<0 || !pending || !awaiting_ack);
+        if(settle && reset_result>=0) reset_result=pending!=0;
         dn_snapshot names; dn_read(&names);
         int bt_pending=reconcile(radio,&names);
         /* Publish one immutable operation result and fresh data together. */
         pthread_mutex_lock(&owner.mu);
         if(!queued && !pending && owner.completed_reset && owner.view.result>=0) owner.view.result=0;
         owner.view.names=names; owner.view.ready=1; owner.view.reset_pending=pending!=0;
+        owner.view.reset_radio=pending && !radio && at_aliases;
         owner.view.bt_pending=bt_pending; owner.view.generation++;
-        if(queued){ owner.view.completed=id; owner.view.result=result; owner.completed_reset=kind==NR_RESET; if(kind==NR_RESET) owner.resetting=0; }
+        if(queued && kind!=NR_RESET){ owner.view.completed=id; owner.view.result=result; owner.completed_reset=0; }
+        if(settle){ owner.view.completed=reset_id; owner.view.result=reset_result; owner.completed_reset=1; owner.resetting=0; reset_id=0; }
         owner.view.busy=owner.queued || owner.reset_queued;
         pthread_mutex_unlock(&owner.mu);
+        ui_notify(UI_WAKE_NAMES);
         retry=mono_ms()+backoff*1000; if(backoff<30) backoff=backoff<16 ? backoff*2 : 30;
         }
         int64_t deadline=retry;
@@ -227,8 +250,10 @@ uint64_t nr_submit_at(nr_kind kind, const char *mac, const char *value, unsigned
     if(nr_start()) return 0;
     pthread_mutex_lock(&owner.mu);
     uint64_t id=0;
-    if(epoch==owner.view.reset_epoch && owner.view.ready && owner.serial!=UINT64_MAX && !owner.reset_queued && !owner.resetting && !owner.view.reset_pending &&
-       (kind==NR_RESET || !owner.view.busy)){
+    /* A reset is always queued: the worker restarts any pending or running
+     * reset from the beginning. Edits wait for every reset and the epoch. */
+    if(epoch==owner.view.reset_epoch && owner.view.ready && owner.serial!=UINT64_MAX &&
+       (kind==NR_RESET || (!owner.reset_queued && !owner.resetting && !owner.view.reset_pending && !owner.view.busy))){
         id=++owner.serial; owner.view.busy=1;
         if(kind==NR_RESET){ owner.view.reset_epoch++; owner.reset_queued=1; owner.reset_id=id; }
         else { owner.queued=1; owner.id=id; owner.kind=kind; snprintf(owner.value,sizeof owner.value,"%s",value); snprintf(owner.mac,sizeof owner.mac,"%s",mac?mac:""); }

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
+#include "indic.h"
 #include "screens.h"
 #include "i18n.h"
 #include "theme.h"
@@ -166,7 +167,7 @@ void mclock_place(int h, int y, int shown){
     lv_obj_set_y(m->canvas, y);
     lv_obj_set_y(m->ampm, y + MC_H - lv_obj_get_height(m->ampm) - 2);
     for(int k = 0; k < 2; k++){
-        lv_obj_set_y(m->colon[k], lv_obj_get_y(m->colon[k]) + y - old_y);
+        lv_obj_set_y(m->colon[k], lv_obj_get_style_y(m->colon[k], 0) + y - old_y);
         if(!shown) lv_obj_add_flag(m->colon[k], LV_OBJ_FLAG_HIDDEN);
         else lv_obj_remove_flag(m->colon[k], LV_OBJ_FLAG_HIDDEN);
     }
@@ -203,19 +204,6 @@ static void weather_event_cb(lv_event_t *e)
     if (t && t[0]) weather_app_open();
 }
 
-static void settings_event_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    if (ui_press_travel() > HOME_TAP_SLOP) return;
-
-    if (g_settings_cb) {
-        g_settings_cb();
-    } else {
-        /* Requested screen enum has no settings screen yet. */
-        screen_show(SCR_HOME);
-    }
-}
-
 static void pp_event_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED){
@@ -234,37 +222,6 @@ static lv_obj_t *make_label(lv_obj_t *parent, const char *text,
     lv_obj_set_style_text_color(label, color, 0);
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     return label;
-}
-
-static lv_obj_t *make_tile(lv_obj_t *parent, int x, int y, int w, const char *symbol,
-                           const char *text, lv_event_cb_t cb, void *user_data)
-{
-    lv_obj_t *btn = lv_button_create(parent);
-    lv_obj_remove_style_all(btn);
-    lv_obj_set_pos(btn, x, y);
-    lv_obj_set_size(btn, w, 92);
-    lv_obj_set_style_radius(btn, 22, 0);
-    lv_obj_set_style_bg_color(btn, TC(SURFACE), 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_70, 0);
-    lv_obj_set_style_bg_color(btn, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
-    lv_obj_set_style_border_color(btn, TC(OUTLINE_BRIGHT), 0);
-    lv_obj_set_style_border_opa(btn, LV_OPA_10, 0);
-    lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
-    ui_on(btn, cb, LV_EVENT_CLICKED, user_data, "home.cb", UI_CORE);
-
-    lv_obj_t *ic = make_label(btn, symbol, TF(UI_24),
-                              TC(TEXT_PRIMARY));
-    lv_obj_set_pos(ic, 0, 18);
-    lv_obj_set_width(ic, w);
-
-    lv_obj_t *title = make_label(btn, text, TF(UI_16),
-                                 TC(TEXT_PRIMARY));
-    lv_obj_set_pos(title, 0, 54);
-    lv_obj_set_width(title, w);
-
-    return btn;
 }
 
 /* A wide rounded "pill" button: icon + label, left-aligned, vertically centered. */
@@ -364,8 +321,8 @@ static void np_fit_run(void){
     int32_t h = lv_obj_get_content_height(g_np_capsule);
     /* keep the theme's own line spacing (fonts carry different leading); move the pair so the space above the title
      * equals the space below the artist's line, and give each line at least its font's height (no clipped descenders) */
-    int32_t lt = lv_font_get_line_height(lv_obj_get_style_text_font(g_np_title, 0));
-    int32_t la = lv_font_get_line_height(lv_obj_get_style_text_font(g_np_artist, 0));
+    int32_t lt = indic_line_height(lv_label_get_text(g_np_title), lv_obj_get_style_text_font(g_np_title, 0));
+    int32_t la = indic_line_height(lv_label_get_text(g_np_artist), lv_obj_get_style_text_font(g_np_artist, 0));
     int32_t gap = lv_obj_get_y(g_np_artist) - lv_obj_get_y(g_np_title);
     if(gap < lt * 3 / 4 || gap > lt + 8) gap = lt;    /* a theme that stacked them oddly: plain line spacing */
     /* centre the INK, not the line boxes (those include descender room, which centred the text low): from the top of a
@@ -626,7 +583,7 @@ void home_create(lv_obj_t *root)
                                   TC(TEXT_PRIMARY));
     lv_obj_center(g_np_thumb_glyph);
 
-    g_np_title = lv_label_create(g_np_capsule);
+    g_np_title = indic_label_create(g_np_capsule);
     lv_label_set_text(g_np_title, tr("Not Playing"));
     lv_label_set_long_mode(g_np_title, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(g_np_title, 62, 10);
@@ -634,7 +591,7 @@ void home_create(lv_obj_t *root)
     lv_obj_set_style_text_font(g_np_title, TF(USER_16), 0);   /* CJK/long titles render (was tofu) */
     lv_obj_set_style_text_color(g_np_title, TC(TEXT_PRIMARY), 0);
 
-    g_np_artist = lv_label_create(g_np_capsule);
+    g_np_artist = indic_label_create(g_np_capsule);
     lv_label_set_text(g_np_artist, tr("Library"));
     lv_label_set_long_mode(g_np_artist, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(g_np_artist, 62, 31);

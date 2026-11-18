@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Compile and exercise the real helper with a device-free SetupAPI mock."""
 import json
 import os

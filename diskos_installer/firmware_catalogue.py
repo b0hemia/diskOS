@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Pinned official packages and a verified, owned cache. No network access."""
 import contextlib
 import hashlib

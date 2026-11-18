@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Ready checklist (slice 2): pure row logic, then the real App with only the probes mocked."""
 import os
 import queue

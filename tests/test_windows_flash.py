@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Development flash gates and failure outcomes, with host/device calls mocked."""
 from contextlib import ExitStack
 import hashlib
@@ -199,6 +199,19 @@ class WindowsFlashTests(unittest.TestCase):
                 mock.patch.object(subprocess, 'call') as native:
             self.assertEqual(flash_child.main(popen.call_args.args[0][3:]), flash_child.VALIDATION_REFUSED)
             native.assert_not_called()
+
+    def test_bundled_writer_pin_and_descriptor(self):
+        root = Path(__file__).resolve().parents[1]
+        source = root / 'flash' / flasher.WRITER_NAME
+        bundled = root / 'vendor/linux-x86_64' / flasher.WRITER_NAME
+        data = source.read_bytes()
+        self.assertEqual(bundled.read_bytes(), data)
+        self.assertEqual(hashlib.sha256(data).hexdigest(), flasher.WRITER_SHA256)
+        for path in (source, bundled):
+            self.assertEqual(flasher._writer_descriptor(str(path)), (768, 1))
+        changed = self.root / flasher.WRITER_NAME
+        changed.write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
+        self.assertIsNone(flasher._writer_descriptor(str(changed)))
 
     def test_writer_hash_and_capacity_still_gate_launch(self):
         self.patch(flasher, 'preflight')

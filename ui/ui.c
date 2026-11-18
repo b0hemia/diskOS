@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+#include "ui_wake.h"
 /* Copyright (C) 2026 diskOS contributors */
+#include "indic.h"
 #include "ui.h"
 #include "ui_dialog.h"
 #include "theme.h"
@@ -81,10 +83,10 @@ static int g_np_fav, g_np_have, g_fav_px, g_fav_py;
  * confirms via a2. Position (a1) frames trigger a full NP refresh from the OLD is_favorite,
  * which would flip the heart back. We hold the tapped value for this exact track until the
  * player confirms it, the track changes, or a timeout - so the heart doesn't visibly bounce. */
-static char g_np_curpath[520];
+static char g_np_curpath[TRACK_PATH_MAX];
 static int  g_favp_active = 0, g_favp_val = 0;
 static uint32_t g_favp_set = 0;
-static char g_favp_path[520];
+static char g_favp_path[TRACK_PATH_MAX];
 static lv_obj_t *btn_mode;
 static lv_obj_t *mode_icon;
 static lv_obj_t *mode_one;
@@ -95,16 +97,16 @@ static lv_obj_t *t_elapsed;
 static lv_obj_t *t_remain;
 
 static lv_color_t accent;
-static char last_path[256];
-static char g_stat_path[256];   /* last track counted in play history (count once per new track) */
+static char last_path[TRACK_PATH_MAX];
+static char g_stat_path[TRACK_PATH_MAX];   /* last track counted in play history (count once per new track) */
 static int g_cast_played;       /* 15c: main.c's receiver confirmation (PLAYING on the facade track's own media); the play-history gate while casting */
 void ui_set_cast_played(int on){ g_cast_played = on != 0; }
 /* Art cache key = album title + the track's PARENT DIRECTORY (not artist). This reuses art
  * within a real album AND within a compilation/various-artists album (same folder), but does
  * NOT reuse across two genuinely-different albums that merely share a title in different
  * folders. For a flat library it degrades to album-only - no worse than before. */
-static char last_art_key[420];  /* key of the art currently shown */
-static char want_art_key[420];  /* key the CURRENT track wants; a finished decode applies only if it matches */
+static char last_art_key[TRACK_PATH_MAX + 96];  /* key of the art currently shown */
+static char want_art_key[TRACK_PATH_MAX + 96];  /* key the CURRENT track wants; a finished decode applies only if it matches */
 static char last_seed_a[IPC_TITLE_CAPACITY];
 static char last_seed_b[160];
 static char cover_src[48];
@@ -130,12 +132,13 @@ static long     g_scrub_lo, g_scrub_hi;  /* the ms window LATCHED when a ring pr
 /* Playback identity belongs to the displayed context, including same-path replay. */
 typedef struct {
     char path[sizeof(((track_state_t *)0)->path)];
-    uint64_t token, library, media;
+    uint64_t token, library, media, book_wake;
     unsigned generation;
     int have;
     pb_source source;
 } np_identity;
 static np_identity g_np_identity, g_scrub_identity;
+static uint64_t g_book_wake_generation;
 static np_identity np_identity_of(const track_state_t *st){
     np_identity id = {.source = playback_source()};
     if(st){
@@ -144,13 +147,14 @@ static np_identity np_identity_of(const track_state_t *st){
         id.have = st->have_track;
         if(mdb_is_book_path(st->path)){
             id.library = ipc_library_epoch(); id.media = sd_io_generation();
+            id.book_wake = g_book_wake_generation;
         }
     }
     return id;
 }
 static int np_identity_equal(const np_identity *a, const np_identity *b){
     return a->source == b->source && a->have == b->have && a->token == b->token &&
-           a->library == b->library && a->media == b->media &&
+           a->library == b->library && a->media == b->media && a->book_wake == b->book_wake &&
            a->generation == b->generation && !strcmp(a->path, b->path);
 }
 static int np_identity_current(const np_identity *id){
@@ -167,14 +171,6 @@ static int np_identity_current(const np_identity *id){
 static int g_seek_sx, g_seek_sy;   /* seek gesture press origin */
 static int g_seek_cand;            /* press landed on the ring band (seek candidate) */
 static int g_seek_on;              /* seek confirmed & actively scrubbing */
-
-static lv_color_t accent_from(const char *a, const char *b)
-{
-    unsigned h = 2166136261u;
-    for(const char *p = a; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
-    for(const char *p = b; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
-    return theme_accent_from_hsv(h % 360, 65, 84);   /* no-art fallback: forced good S/V */
-}
 
 static void mmss(long ms, char *buf, size_t len)
 {
@@ -281,9 +277,20 @@ int ui_label_set_changed(lv_obj_t *obj, const char *txt)
     lv_label_set_text(obj, txt ? txt : "");
     return 1;
 }
-static void set_label_text_changed(lv_obj_t *obj, const char *txt)
+static const char *label_full_source(lv_obj_t *obj)
 {
-    ui_label_set_changed(obj, txt);
+    for(uint32_t i = 0; i < lv_obj_get_event_count(obj); i++) {
+        lv_event_dsc_t *event = lv_obj_get_event_dsc(obj, i);
+        if(lv_event_dsc_get_cb(event) == label_input_free) {
+            label_input_t *input = lv_event_dsc_get_user_data(event);
+            if(input && input->text && indic_text(input->text)) return input->text;
+        }
+    }
+    return lv_label_get_text(obj);
+}
+static int set_label_text_changed(lv_obj_t *obj, const char *txt)
+{
+    return ui_label_set_changed(obj, txt);
 }
 
 /* ---- Now Playing seek recognizer ---------------------------------------
@@ -432,6 +439,8 @@ int ui_np_seek_press(int x, int y){
     lv_point_t p = { .x = x, .y = y };
     if(btn_beam && !lv_obj_has_flag(btn_beam, LV_OBJ_FLAG_HIDDEN) &&
        lv_obj_hit_test(btn_beam, &p)) return 0;
+    if(btn_mode && !lv_obj_has_flag(btn_mode, LV_OBJ_FLAG_HIDDEN) &&
+       lv_obj_hit_test(btn_mode, &p)) return 0;
     if(y < 40) return 0;                          /* top drawer zone */
     if(y >= HOME_SWIPE_Y) return 0;               /* bottom edge band: the Home swipe starts here, never a seek */
     if(ui_receiver_active()) return 0;                                    /* nothing to seek */
@@ -480,7 +489,7 @@ int ui_np_seek_move(int x, int y){
     return 1;
 }
 /* Returning from Beam: show the saved time while the reloaded track still reports its start. */
-static char     g_ret_path[256];
+static char     g_ret_path[TRACK_PATH_MAX];
 static long     g_ret_ms = -1;
 static uint32_t g_ret_until = 0;
 void ui_np_hold_return(const char *path, long ms){
@@ -490,6 +499,12 @@ void ui_np_hold_return(const char *path, long ms){
 void ui_np_seek_refused(void){
     g_seek_target_ms = -1; g_seek_hold_until = 0;
     ui_toast("Couldn't seek - try again");
+}
+/* a dialog took the touch: drop the armed or running seek without committing it. The ring and times keep showing the
+ * dragged spot until the next progress tick repaints the played position (the same as the wander-off path in
+ * ui_np_seek_move); there is no cheap exact source for the played value here, so the shown value is left alone. */
+void ui_np_seek_cancel(void){
+    g_seek_cand = 0; g_seek_on = 0; g_scrubbing = 0;
 }
 /* release: commit the seek if one was active. returns 1 if it consumed the gesture */
 int ui_np_seek_release(int x, int y){
@@ -632,13 +647,13 @@ static void transport_cb(lv_event_t *e)
  * main-loop swipe gesture (-> SCR_NPHUB). */
 static int g_cover_px, g_cover_py;
 /* ---- full-screen album art (image choice: fsart_reload_img, below the art state) ---- */
-static char fsart_path[256];
+static char fsart_path[TRACK_PATH_MAX];
 static pb_source fsart_source;
 static void fsart_reload_img(void);
 static int fsart_local(void);
 static void fsart_refresh_text(void){
-    if(fsart_title)  lv_label_set_text(fsart_title,  lv_label_get_text(title));
-    if(fsart_artist) lv_label_set_text(fsart_artist, lv_label_get_text(artist));
+    if(fsart_title)  ui_label_set_changed(fsart_title,  label_full_source(title));
+    if(fsart_artist) ui_label_set_changed(fsart_artist, label_full_source(artist));
 }
 void ui_np_fsart_open(void){
     if(!fsart || fsart_on || !g_np_have) return;       /* nothing to show if no track */
@@ -762,7 +777,7 @@ static int header_boundary(const char *s, size_t i, int path){
 }
 static int header_width(const char *s, const lv_font_t *font, int tracking){
     lv_point_t size;
-    lv_text_get_size(&size, s, font, tracking, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    indic_text_get_size(&size, s, font, tracking, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
     return size.x;
 }
 static int header_split(const char *text, char *out, size_t cap, const lv_font_t *font, int tracking, int room, int clamp){
@@ -771,7 +786,7 @@ static int header_split(const char *text, char *out, size_t cap, const lv_font_t
     char buf[1024];
     /* Reserve newline, dots and terminator; stop only at complete glyphs. */
     for(size_t i = 1; i < len && i + 5 < sizeof buf; i++){
-        if(((unsigned char)text[i] & 0xc0) == 0x80) continue;
+        if(!indic_boundary(text, i, font)) continue;
         memcpy(buf, text, i); buf[i] = 0;
         int left = header_width(buf, font, tracking);
         if(left > room) break;
@@ -792,7 +807,7 @@ static int header_split(const char *text, char *out, size_t cap, const lv_font_t
     memcpy(buf, text, at); buf[at] = '\n';
     size_t start = at + 1, end = 0, last_word = 0;
     for(size_t i = 1; rest[i-1] && start + i + (full ? 1 : 4) <= sizeof buf; i++){
-        if(((unsigned char)rest[i] & 0xc0) == 0x80) continue;
+        if(!indic_boundary(rest, i, font)) continue;
         memcpy(buf + start, rest, i);
         strcpy(buf + start + i, full ? "" : "...");
         if(header_width(buf + start, font, tracking) > room) break;
@@ -804,7 +819,7 @@ static int header_split(const char *text, char *out, size_t cap, const lv_font_t
         else {
             size_t token = 1;
             while(rest[token] && !header_boundary(rest, token, path)) token++;
-            if(lv_text_get_width(rest, token, font, tracking) <= room)
+            if((!indic_text(rest) && lv_text_get_width(rest, token, font, tracking) <= room))
                 end = 0;
         }
     }
@@ -835,7 +850,7 @@ void ui_title_source_changed(lv_obj_t *t){
 }
 /* Ad-hoc headings can retain their established fixed face while sharing page geometry. */
 lv_obj_t *ui_title_label(lv_obj_t *root, const char *title, const lv_font_t *face){
-    lv_obj_t *t = lv_label_create(root);
+    lv_obj_t *t = indic_label_create(root);
     lv_obj_set_user_data(t, (void *)&theme_title_tag);
     header_title_t *h = calloc(1, sizeof *h);
     if(h){ h->face = face; lv_obj_add_event_cb(t, header_face_mark, LV_EVENT_DELETE, h); }
@@ -887,7 +902,8 @@ void ui_headers_fit(lv_obj_t *root){
     char fitted[1024];
     const char *fitted_text = text;
     /* Style setters invalidate even unchanged values; fitting an idle header must settle. */
-    int lh = lv_font_get_line_height(font), ls = lv_obj_get_style_text_letter_space(t, 0);
+    int rtl_header = (indic_scripts(text) & 12u) != 0;
+    int lh = indic_line_height(text, font), ls = lv_obj_get_style_text_letter_space(t, 0);
     if(!strcmp(theme_kit()->id, "blueprint")) ls = 0;
     if(lv_obj_get_style_text_letter_space(t, 0) != (ls)) lv_obj_set_style_text_letter_space(t, ls, 0);
     int line_gap = 2, top = 32, pad = !strcmp(theme_kit()->id, "blueprint") ? 10 : 0;
@@ -899,14 +915,19 @@ void ui_headers_fit(lv_obj_t *root){
         if(room > 2 * (180 - right)) room = 2 * (180 - right);
     }
     lv_point_t single;
-    lv_text_get_size(&single, text, font, ls, line_gap, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    indic_text_get_size(&single, text, font, ls, line_gap, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
     if(single.y > lh || single.x > room - 2 * pad){
         /* Search the wider chord before omitting any library-name suffix. */
         top = edge ? 48 : 76;
         for(; top <= 84; top += 2){
             room = ui_round_width(top + 2, 12);
             if(room > 300) room = 300;
-            if(header_split(text, fitted, sizeof fitted, font, ls, room - 2 * pad, top == 84)){
+            if(rtl_header) {
+                lv_point_t wrapped;
+                indic_text_get_size(&wrapped,text,font,ls,line_gap,room-2*pad,LV_TEXT_FLAG_NONE);
+                if(wrapped.y <= 2*lh+line_gap || top == 84) break;
+            }
+            else if(header_split(text, fitted, sizeof fitted, font, ls, room - 2 * pad, top == 84)){
                 fitted_text = fitted;
                 break;
             }
@@ -917,7 +938,8 @@ void ui_headers_fit(lv_obj_t *root){
     if(lv_obj_get_style_text_line_space(t, 0) != (line_gap)) lv_obj_set_style_text_line_space(t, line_gap, 0);
     if(lv_obj_get_style_text_align(t, 0) != (LV_TEXT_ALIGN_CENTER)) lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
     if(lv_obj_get_style_max_width(t, 0) != (LV_COORD_MAX)) lv_obj_set_style_max_width(t, LV_COORD_MAX, 0);
-    if(lv_label_get_long_mode(t) != LV_LABEL_LONG_WRAP) lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
+    lv_label_long_mode_t header_mode = rtl_header ? LV_LABEL_LONG_DOT : LV_LABEL_LONG_WRAP;
+    if(lv_label_get_long_mode(t) != header_mode) lv_label_set_long_mode(t,header_mode);
     int headroom = theme_trait(THEME_TRAIT_DOT_TITLES) ? 6 : 0;
     if(lv_obj_get_style_pad_top(t, 0) != (cap ? top : headroom)) lv_obj_set_style_pad_top(t, cap ? top : headroom, 0);
     if(lv_obj_get_style_pad_bottom(t, 0) != (3)) lv_obj_set_style_pad_bottom(t, 3, 0);
@@ -929,6 +951,11 @@ void ui_headers_fit(lv_obj_t *root){
     } else {
         lv_obj_set_pos(t, 180 - room / 2, top - headroom);
         lv_obj_set_size(t, room, LV_SIZE_CONTENT);
+    }
+    if(rtl_header) {
+        lv_point_t wrapped;
+        indic_text_get_size(&wrapped,text,font,ls,line_gap,room-2*pad,LV_TEXT_FLAG_NONE);
+        lv_obj_set_content_height(t,LV_MIN(wrapped.y,2*lh+line_gap));
     }
     if(strcmp(lv_label_get_text(t), fitted_text)) lv_label_set_text(t, fitted_text);
     if(heading && (!heading->shown || strcmp(heading->shown, fitted_text))){
@@ -1385,7 +1412,8 @@ static int oklab2rgb(float L,float a,float b, int *R,int *G,int *B){
     for(int i=0;i<3;i++){
         float x=lin[i];
         if(x<-0.001f||x>1.001f) in=0;
-        if(x<0)x=0; if(x>1)x=1;
+        if(x<0)x=0;
+        if(x>1)x=1;
         float v = x<=0.0031308f ? 12.92f*x : 1.055f*powf(x,1.0f/2.4f)-0.055f;
         *o[i] = (int)(v*255.0f+0.5f);
     }
@@ -1559,6 +1587,7 @@ static void update_accent_seed(const track_state_t *st)
 /* set by clear_art_state / apply_art (main thread); main.c re-pushes the
  * art-dependent surfaces (Home pill / Saver backdrop / Options thumb) when set. */
 static int g_art_applied = 0;
+static int g_art_displayed_dsc_valid; /* validity of retained small pixels while hidden */
 
 /* Only current small artwork may act as the NP placeholder. */
 static int g_np_small_valid, g_np_cover_loading;
@@ -1663,13 +1692,18 @@ static void clear_art_state(void)
  * (displayed_idx ^ 1), so an in-flight decode can never overwrite the /tmp BMP the
  * shown art (Home pill / Saver backdrop) may still be rendering from. */
 typedef struct {
-    char track[256];
+    char track[TRACK_PATH_MAX];
+    char protected_previous[TRACK_PATH_MAX];
     int  idx;
     char out[40], tout[40], bout[40];
-    char art_key[420];       /* album+dir reuse/staleness key (see last_art_key) */
+    char art_key[TRACK_PATH_MAX + 96];       /* request source key; pixel equality is separate */
+    art_resolution resolution;
+    art_picture_id known;
+    int reuse;
     int  is_clear;           /* "no track" - handled on the main thread; worker skips */
     char artist[160], album[160], title[IPC_TITLE_CAPACITY];   /* for the online-art fallback (netart.c) */
     int  online;             /* Online Album Art was on when this was requested (read on the main thread) */
+    int  pos, mode;         /* bounded upcoming-track pre-resolution hints */
     int  online_only;        /* committed-title retry after a local miss */
     receiver_art_key receiver;
     int  from_net;           /* (result) the picture came from Online Album Art */
@@ -1680,15 +1714,26 @@ typedef struct {
 static pthread_mutex_t g_decode_mu = PTHREAD_MUTEX_INITIALIZER;
 /* Shared by ALL artwork decoders (live NP, prewarm, AND the vinyl saver) so at most one runs at
  * once - two ~19MB pipelines together risk OOM. saver.c wraps its decode with these. */
-void ui_decode_lock(void){ pthread_mutex_lock(&g_decode_mu); }
+static _Atomic unsigned g_decode_waiting;
+void ui_decode_lock(void){
+    atomic_fetch_add(&g_decode_waiting, 1); art_spec_cancel();
+    pthread_mutex_lock(&g_decode_mu); atomic_fetch_sub(&g_decode_waiting, 1);
+}
 void ui_decode_unlock(void){ pthread_mutex_unlock(&g_decode_mu); }
+int ui_decode_speculative(unsigned *gen){
+    *gen=art_spec_gen(); return !g_decode_waiting;
+}
 
 /* Album-cover prewarm work queue. The MAIN thread enqueues representative track paths (built with the
  * in-memory album/track caches, which are NOT thread-safe); the prewarm worker only pops + decodes, so
  * no mdb in-memory cache is ever touched off the UI thread. Bounded ring: enqueue fails (0) when full,
  * and the enumerator then pauses rather than dropping albums. */
 #define PWQ_MAX 48   /* the worker drains at ~2/s; the seed self-throttles on a full queue (resumes the same album), so a small ring is plenty */
-static char            pwq[PWQ_MAX][512];
+static char demandq[24][TRACK_PATH_MAX];
+static int demand_head, demand_tail;
+static int pwq_background_paused;
+static char            pwq[PWQ_MAX][TRACK_PATH_MAX];
+static unsigned char   pwq_prove[PWQ_MAX];
 static int             pwq_head, pwq_tail;
 static pthread_mutex_t pwq_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  pwq_cv;
@@ -1713,25 +1758,67 @@ void ui_set_prewarm_mode(int m){                 /* 0=covers only 1=idle 2=idle&
     }
     pthread_mutex_unlock(&pwq_mu);
 }
-int ui_prewarm_enqueue(const char *path){          /* MAIN thread; returns 1 if queued, 0 if full/dup */
+static int pwq_enqueue(const char *path, int prove){
     if(!path || !path[0]) return 1;
+    if(strlen(path) >= sizeof pwq[0]) return 1;   /* too long for the ring: skipped as handled, never cut to a prefix */
     int ok = 0;
     pthread_once(&pwq_once, pwq_init);
     pthread_mutex_lock(&pwq_mu);
+    if(prove){
+        for(int i=demand_head;i!=demand_tail;i=(i+1)%24) if(!strcmp(demandq[i],path)){ ok=1; goto done; }
+        int next=(demand_tail+1)%24;
+        if(next!=demand_head){
+            copy_cstr(demandq[demand_tail],sizeof demandq[0],path); demand_tail=next;
+            ok=1; pthread_cond_signal(&pwq_cv);
+        }
+        goto done;
+    }
+    /* Promote duplicates even when the ring is full. Album preparation must
+     * never downgrade a queued nearby proof. */
+    for(int i=pwq_head; i!=pwq_tail; i=(i+1)%PWQ_MAX) if(!strcmp(pwq[i], path)){
+        if(prove) pwq_prove[i] = 1;
+        ok = 1;
+        goto done;
+    }
     int nt = (pwq_tail+1) % PWQ_MAX;
     if(nt != pwq_head){
-        int dup = 0;                                /* cheap dedup: same path already pending */
-        for(int i=pwq_head; i!=pwq_tail; i=(i+1)%PWQ_MAX) if(!strcmp(pwq[i], path)){ dup=1; break; }
-        if(dup) ok = 1;
-        else { copy_cstr(pwq[pwq_tail], sizeof pwq[pwq_tail], path); pwq_tail = nt; ok = 1; pthread_cond_signal(&pwq_cv); }
+        copy_cstr(pwq[pwq_tail], sizeof pwq[pwq_tail], path);
+        pwq_prove[pwq_tail] = prove != 0;
+        pwq_tail = nt;
+        ok = 1;
+        pthread_cond_signal(&pwq_cv);
     }
+done:
     pthread_mutex_unlock(&pwq_mu);
     return ok;
 }
-static int pwq_pop(char *out, int cap){            /* worker thread; 1 if an item was dequeued */
+int ui_prewarm_enqueue(const char *path){
+    return pwq_enqueue(path, 0);
+}
+/* The newest playback neighbourhood replaces obsolete speculative neighbours.
+ * Its bounded 16 paths fit independently of an arbitrarily full seed backlog. */
+static void pwq_replace_nearby(char paths[][TRACK_PATH_MAX],int n){
+    if(n<0) n=0;
+    if(n>23) n=23;
+    pthread_mutex_lock(&pwq_mu);
+    demand_head=demand_tail=0;
+    for(int i=0;i<n;i++){
+        copy_cstr(demandq[demand_tail],sizeof demandq[0],paths[i]); demand_tail++;
+    }
+    pthread_cond_signal(&pwq_cv);
+    pthread_mutex_unlock(&pwq_mu);
+}
+static int pwq_pop(char *out, int cap, int *prove){
     int got = 0;
     pthread_mutex_lock(&pwq_mu);
-    if(pwq_head != pwq_tail){ copy_cstr(out, cap, pwq[pwq_head]); pwq_head = (pwq_head+1)%PWQ_MAX; got = 1; }
+    if(demand_head != demand_tail){
+        copy_cstr(out,cap,demandq[demand_head]); demand_head=(demand_head+1)%24; *prove=1; got=1;
+    }else if(!pwq_background_paused && pwq_head != pwq_tail){
+        copy_cstr(out, cap, pwq[pwq_head]);
+        *prove = pwq_prove[pwq_head];
+        pwq_head = (pwq_head+1)%PWQ_MAX;
+        got = 1;
+    }
     pthread_mutex_unlock(&pwq_mu);
     return got;
 }
@@ -1742,7 +1829,7 @@ static void pw_sleep(int secs){                    /* idle sleep, but wake early
     pthread_once(&pwq_once, pwq_init);
     pthread_mutex_lock(&pwq_mu);
     unsigned seq = pwq_mode_seq;
-    while(pwq_head == pwq_tail && seq == pwq_mode_seq){
+    while(demand_head == demand_tail && (pwq_background_paused || pwq_head == pwq_tail) && seq == pwq_mode_seq){
         /* Mode 0 has no sweep window to recheck. Active modes keep their delay. */
         if(g_prewarm_mode == 0) pthread_cond_wait(&pwq_cv, &pwq_mu);
         else if(pthread_cond_timedwait(&pwq_cv, &pwq_mu, &until) == ETIMEDOUT) break;
@@ -1751,6 +1838,10 @@ static void pw_sleep(int secs){                    /* idle sleep, but wake early
 }
 
 static pthread_mutex_t g_art_mu = PTHREAD_MUTEX_INITIALIZER;
+static char g_art_displayed_track[TRACK_PATH_MAX];
+static art_resolution g_art_displayed;
+static uint64_t g_art_library;
+static uint64_t g_art_media;
 static int g_art_title_pending;   /* main thread: local work started before title commitment */
 static uint64_t g_art_token;
 static unsigned g_art_generation;
@@ -1766,10 +1857,20 @@ static art_req_t g_art_result;      /* the req the waiting result is for (guarde
 /* main thread only: push a finished decode onto the NP cover + validity flags */
 static void apply_art(const art_req_t *job)
 {
+    if(!job->receiver.session){
+        /* Retain the local source proof even when online art filled a local
+         * miss. It proves source freshness, never equality of online pixels. */
+        g_art_displayed = job->resolution;
+        if(job->from_net) memset(&g_art_displayed.picture, 0, sizeof g_art_displayed.picture);
+        copy_cstr(g_art_displayed_track, sizeof g_art_displayed_track, job->track);
+        if(!job->from_net)
+            sharp_cover_set_identity(job->track, &job->resolution.picture, mdb_is_book_path(job->track));
+    }
     snprintf(cover_src,    sizeof cover_src,    "A:/tmp/cover%d.bmp",    job->idx);
     snprintf(thumb_src,    sizeof thumb_src,    "A:/tmp/thumb%d.bmp",    job->idx);
     snprintf(backdrop_src, sizeof backdrop_src, "A:/tmp/backdrop%d.bmp", job->idx);
-    coverdsc_valid = (load_cover_dsc(job->out) == 0);   /* track whether g_coverdsc is THIS track's */
+    coverdsc_valid = (load_cover_dsc(job->out) == 0);
+    g_art_displayed_dsc_valid = coverdsc_valid;   /* track whether g_coverdsc is THIS track's */
     cover_valid = thumb_valid = backdrop_valid = 1;
     g_np_small_valid = 1; g_np_cover_loading = 0;
     ui_np_cover_changed();
@@ -1782,7 +1883,7 @@ static void apply_art(const art_req_t *job)
         int acc_rgb = mdb_song_accent(job->track);
         if(acc_rgb > 0){ accent = theme_accent_from_rgb(acc_rgb); apply_accent(); }
     }
-    copy_cstr(last_art_key, sizeof last_art_key, job->art_key);   /* cache key (album+dir) */
+    copy_cstr(last_art_key, sizeof last_art_key, job->art_key);   /* verified picture/book key */
     if(backdrop && g_np_backdrop_on) {                /* a theme may keep its own background (ui_np_backdrop_enabled) */
         lv_image_set_src(backdrop, backdrop_src);
         lv_obj_remove_flag(backdrop, LV_OBJ_FLAG_HIDDEN);
@@ -1803,40 +1904,43 @@ static void *art_worker(void *arg)
                                       * by the setter under g_art_mu, so it can't interleave this snapshot */
         pthread_mutex_unlock(&g_art_mu);
 
+        const char *playing_pins[]={job.track,job.protected_previous};
+        artcache_protect(0,playing_pins,2);
         int rc, from_net = 0;                             /* from_net: the picture came from Online Album Art */
-        char fp0[24] = "";                                /* the cover's fingerprint (for the accent's freshness) */
-        if(job.is_clear) rc = -1;
-        else if(job.receiver.session){
-            pthread_mutex_lock(&g_decode_mu);
-            rc=art_receiver_decode(&job.receiver,job.out,job.tout,job.bout,my_gen);
-            pthread_mutex_unlock(&g_decode_mu);
+        char fp0[128] = "";                                /* the cover's fingerprint (for the accent's freshness) */
+        if(job.is_clear){
+            pthread_mutex_lock(&g_art_mu);
+            if(my_req == g_art_req){ g_art_inflight = 0; pthread_mutex_unlock(&g_art_mu); return NULL; }
+            pthread_mutex_unlock(&g_art_mu); continue;
         }
-        else if(!job.online_only && artcache_get(job.track, job.out, job.tout, job.bout) == 0){ rc = 0;   /* cached -> fast copy, no decode */
-               if(artcache_key(job.track, fp0, sizeof fp0) != 0) fp0[0] = 0; }
-        else { int have_fp = artcache_key(job.track, fp0, sizeof fp0) == 0;   /* identity BEFORE decoding */
-               pthread_mutex_lock(&g_decode_mu);                                     /* miss -> decode (killable), then cache */
-               /* Pass OUR captured token: if a skip supersedes this decode any time after the snapshot (it
-                * always bumps g_cancel_gen via art_cancel), the per-child gen check trips and no obsolete
-                * decode runs - closing the window between request-validation and the decode. */
-               rc = job.online_only ? -1 : art_make_all_ex_gen(job.track, job.out, job.tout, job.bout, 1, my_gen);
-               /* no cover of its own: a picture saved by Online Album Art (netart.c), decoded the same way */
-               char np[300];
-               if(rc != 0 && rc != -2 && job.online && netart_have(job.artist, job.album, job.title, np, sizeof np)){
-                   if(netart_touch(np)){                      /* in use: the prune leaves it alone (and it is still there) */
-                       rc = art_make_all_ex_gen(np, job.out, job.tout, job.bout, 1, my_gen);
-                       from_net = rc == 0;
-                       int ex = art_last_exit();              /* the helper itself said: no picture / unsupported / malformed */
-                       if(rc != 0 && (ex == 3 || ex == 4 || ex == 5)) netart_reject(np);   /* never offer it again */
-                   }
-               }
-               pthread_mutex_unlock(&g_decode_mu);
-               /* an online picture is never cached as the song's own cover: turning the setting off must drop it */
-               if(rc == 0 && have_fp && !from_net) artcache_put_if(job.track, fp0, job.out, job.tout, job.bout); }
+        else if(job.receiver.session){
+            ui_decode_lock();
+            rc=art_receiver_decode(&job.receiver,job.out,job.tout,job.bout,my_gen);
+            ui_decode_unlock();
+        }
+        else {
+            ui_decode_lock();
+            rc = job.online_only ? -1 : artcache_resolve(job.track, job.out, job.tout, job.bout,
+                                                       1, my_gen, &job.known, &job.resolution);
+            if(rc == ART_ID_REUSED){ job.reuse = 1; rc = 0; }
+            if(job.resolution.state == ART_PRESENT)
+                artcache_accent_key(&job.resolution.picture,fp0,sizeof fp0);
+            char np[300];
+            if(rc != 0 && rc != -2 && job.online && netart_have(job.artist, job.album, job.title, np, sizeof np)){
+                if(netart_touch(np)){
+                    rc = art_make_all_ex_gen(np, job.out, job.tout, job.bout, 1, my_gen);
+                    from_net = rc == 0;
+                    int ex = art_last_exit();
+                    if(rc != 0 && (ex == 3 || ex == 4 || ex == 5)) netart_reject(np);
+                }
+            }
+            ui_decode_unlock();
+        }
 
         /* compute + cache the OKLab accent HERE (off the UI thread) so apply_art()
          * never blocks: by the time the main thread applies this decode, the accent
          * is already in the DB and is just read back. Skipped in static-accent mode. */
-        if(rc == 0 && !from_net && !job.is_clear && !ui_accent_is_static() && fp0[0] && !mdb_song_accent_fresh(job.track, fp0)){
+        if(rc == 0 && !job.reuse && !from_net && !job.is_clear && !ui_accent_is_static() && fp0[0] && !mdb_song_accent_fresh(job.track, fp0)){
             uint8_t *buf = malloc(CBMP*CBMP*4);
             if(buf){
                 uint32_t rgb;
@@ -1852,6 +1956,17 @@ static void *art_worker(void *arg)
             g_art_rc = rc; g_art_result = job; g_art_done_req = my_req;
             g_art_ready = 1; g_art_inflight = 0;
             pthread_mutex_unlock(&g_art_mu);
+            ui_notify(UI_WAKE_ART);
+            if((rc == 0 || job.resolution.state == ART_ABSENT) && !job.receiver.session && !job.from_net && job.track[0]){
+                /* 16 paths of up to TRACK_PATH_MAX bytes: heap, not this worker's stack (default-size thread stack) */
+                char (*nearby)[TRACK_PATH_MAX] = malloc(16 * sizeof *nearby);
+                int n = nearby ? mdb_art_nearby(job.track, job.pos, job.mode, nearby, 16) : 0;
+                const char *pins[16]; for(int i=0;i<n;i++) pins[i]=nearby[i];
+                pthread_mutex_lock(&g_art_mu);
+                if(my_req==g_art_req){ artcache_protect(1,pins,n); pwq_replace_nearby(nearby,n); }
+                pthread_mutex_unlock(&g_art_mu);
+                free(nearby);
+            }
             return NULL;
         }
         pthread_mutex_unlock(&g_art_mu);    /* a newer request arrived -> loop, serve it */
@@ -1872,6 +1987,49 @@ static void art_request_clear(void)
     g_art_target.is_clear = 1;
     pthread_mutex_unlock(&g_art_mu);
     art_cancel();   /* kill any in-flight decode so it can't publish stale art */
+}
+
+/* Wake validation has its own short-lived worker: it must not wait behind
+ * prewarming's thermal/idle gates or start a decoder on an unchanged source. */
+static pthread_mutex_t art_wake_mu = PTHREAD_MUTEX_INITIALIZER;
+static int art_wake_pending, art_wake_running;
+static char art_wake_track[TRACK_PATH_MAX];
+static art_resolution art_wake_displayed;
+static void art_wake_check(const char *track, const art_resolution *displayed){
+    sd_io_check_media();
+    uint64_t media = sd_io_generation();
+    if(artcache_revalidate(track, displayed) && media == sd_io_generation())
+        sd_io_invalidate();
+}
+static void *art_wake_worker(void *unused){
+    (void)unused;
+    for(;;){
+        char track[TRACK_PATH_MAX]; art_resolution displayed;
+        pthread_mutex_lock(&art_wake_mu);
+        if(!art_wake_pending){
+            art_wake_running = 0;
+            pthread_mutex_unlock(&art_wake_mu); return NULL;
+        }
+        copy_cstr(track, sizeof track, art_wake_track); displayed = art_wake_displayed;
+        art_wake_pending = 0;
+        pthread_mutex_unlock(&art_wake_mu);
+        art_wake_check(track, &displayed);
+    }
+}
+static void ui_art_wake(const char *track, const art_resolution *displayed){
+    pthread_mutex_lock(&art_wake_mu);
+    copy_cstr(art_wake_track, sizeof art_wake_track, track);
+    art_wake_displayed = *displayed; art_wake_pending = 1;
+    if(!art_wake_running){
+        pthread_t thread;
+        art_wake_running = 1;
+        if(!pthread_create(&thread, NULL, art_wake_worker, NULL)) pthread_detach(thread);
+        else {
+            art_wake_running = art_wake_pending = 0;
+            sd_io_invalidate(); /* Fail closed if source verification cannot run. */
+        }
+    }
+    pthread_mutex_unlock(&art_wake_mu);
 }
 
 /* UI-owned metadata: only refresh/update may accept mail; setters share this snapshot. */
@@ -1900,9 +2058,23 @@ static void ui_bookmeta_request(const track_state_t *st)
     g_book_key.media_generation = sd_io_generation();
     bookmeta_request(g_bookmeta, book ? &g_book_key : NULL, book);
 }
+void ui_art_retry(void);
 int ui_bookmeta_refresh(const track_state_t *st)
 {
-    if(!st) sd_io_invalidate(); /* wake barrier before any cached publication */
+    /* NULL resets the metadata request/token before polling: neither a cached
+     * snapshot nor pre-wake mail can publish. Artwork has its own source check;
+     * waking alone says nothing about SD ownership or media identity. */
+    if(!st){
+        albumwall_wake();
+        artcache_maintenance_wake();
+        g_book_wake_generation++; /* Retire book gestures/controls captured before darkness. */
+        art_resolution proof = {0};
+        if(!strcmp(last_path, g_art_displayed_track)) proof = g_art_displayed;
+        /* No reusable artwork proof: retry artwork alone. A speculative retry
+         * must not race the book wake request with another SD-generation bump. */
+        if(last_path[0] && !proof.revision[0] && !artcache_resolution(last_path, &proof)) ui_art_retry();
+        ui_art_wake(last_path, &proof);
+    }
     ui_bookmeta_request(st);
     return bookmeta_poll(g_bookmeta);
 }
@@ -2104,22 +2276,25 @@ static void sleep_click_cb(lv_event_t *e)
     }
 }
 
-/* art reuse/staleness key: album title + the track's parent directory. Audiobooks (.m4b) each carry
- * their own cover, so key them by full path - two books sharing an album tag in one folder must not
- * reuse each other's cover. */
+/* Content authorizes reuse; a book additionally owns its full path. Unknown
+ * is path-scoped and can never equal a verified key. No I/O on this path. */
 static void make_art_key(const track_state_t *st, char *out, int cap)
 {
-    if(mdb_is_book_path(st->path)){ snprintf(out, cap, "%s", st->path); return; }
-    char dir[256]; snprintf(dir, sizeof dir, "%s", st->path);
-    char *slash = strrchr(dir, '/'); if(slash) *slash = '\0'; else dir[0] = '\0';
-    snprintf(out, cap, "%s\n%s", st->album, dir);
+    art_resolution r;
+    if(!artcache_resolution(st->path, &r) || r.state != ART_PRESENT){
+        snprintf(out, cap, "unknown:%s", st->path); return;
+    }
+    char hex[65];
+    for(int i=0;i<32;i++) snprintf(hex+i*2, 3, "%02x", r.picture.sha256[i]);
+    snprintf(out, cap, "%s:%llu:%s", hex, (unsigned long long)r.picture.length,
+             mdb_is_book_path(st->path) ? st->path : "");
 }
 
 /* The SD card opened for diskOS (the launch gate passed): a cover requested before that - a UI started mid-song,
  * e.g. by a theme change - failed and is never retried for the same song. Forget the path so the next track-state
  * update requests it again. */
 static int g_art_force;   /* main thread only: run ui_update on the next loop (no player frame needed) */
-void ui_art_retry(void){ sharp_cover_invalidate(); last_path[0] = '\0'; last_art_key[0] = '\0'; g_art_force = 1; }
+void ui_art_retry(void){ artcache_resolution_invalidate(); sharp_cover_invalidate(); last_path[0] = '\0'; last_art_key[0] = '\0'; g_art_force = 1; }
 /* redo the current song's cover from scratch (no same-album reuse): Online Album Art was switched */
 void ui_art_redo(void){ ui_art_retry(); }
 /* main.c: 1 once after a redo/landed picture, so the main loop runs its update even without a player frame */
@@ -2157,11 +2332,38 @@ static void update_cover_for_path(const track_state_t *st)
 {
     receiver_art_key receiver; receiver_art_get(&receiver);
     if(receiver.session) return;
+    uint64_t library = ipc_library_epoch(), media = sd_io_generation();
+    if(library != g_art_library || media != g_art_media){
+        artcache_resolution_invalidate(); sharp_cover_invalidate();
+        last_path[0] = 0; last_art_key[0] = 0;
+        g_art_library = library; g_art_media = media;
+    }
     int path_changed = strcmp(last_path, st->path) != 0;
     int identity_changed = st->playback_token != g_art_token ||
                            st->player_generation != g_art_generation;
-    if(path_changed) g_np_small_valid = 0;
-    sharp_cover_set_source(st->path);
+    art_resolution resolved = {0};
+    if(!artcache_resolution(st->path, &resolved) &&
+       g_art_displayed.state == ART_PRESENT &&
+       !strcmp(st->path, g_art_displayed_track) &&
+       artcache_resolution_current(st->path, &g_art_displayed)){
+        /* The bounded lookup table may evict the playing track. Its applied
+         * proof remains usable only in the same resolution/media epoch.
+         * Restore it before constructing the key or feeding sharp artwork. */
+        resolved = g_art_displayed;
+    }
+    char art_key[TRACK_PATH_MAX + 96]; make_art_key(st, art_key, sizeof art_key);
+    /* Supersede success AND failure before the verified reuse branch. */
+    if(path_changed){
+        pthread_mutex_lock(&g_art_mu);
+        g_art_req++; g_art_ready = 0;
+        memset(&g_art_target, 0, sizeof g_art_target); g_art_target.is_clear = 1;
+        if(g_art_inflight) art_cancel();
+        pthread_mutex_unlock(&g_art_mu);
+    }
+    int equal = last_art_key[0] && g_art_displayed.state == ART_PRESENT && resolved.state == ART_PRESENT &&
+                art_picture_equal(&resolved.picture, &g_art_displayed.picture) &&
+                !strcmp(last_art_key, art_key);
+    sharp_cover_set_identity(st->path, resolved.state == ART_PRESENT ? &resolved.picture : NULL, mdb_is_book_path(st->path));
     if(path_changed || identity_changed){
         g_art_token = st->playback_token;
         g_art_generation = st->player_generation;
@@ -2183,14 +2385,19 @@ static void update_cover_for_path(const track_state_t *st)
         online_only = 1;
     }
     np_sharp_demand();
-    char art_key[420]; make_art_key(st, art_key, sizeof art_key);
     copy_cstr(want_art_key, sizeof want_art_key, art_key);   /* what the live track wants now */
 
-    /* Art is shared within an album/folder: same key + valid art -> reuse, skip decoding. */
-    if(st->album[0] && cover_valid && strcmp(last_art_key, art_key) == 0) {
+    /* Already verified equal: retain every descriptor and its pixels. */
+    if(equal) {
+        cover_valid = thumb_valid = backdrop_valid = 1;
+        coverdsc_valid = g_art_displayed_dsc_valid;
+        if(backdrop && g_np_backdrop_on) lv_obj_remove_flag(backdrop, LV_OBJ_FLAG_HIDDEN);
+        g_art_applied = 1;
+        g_art_displayed = resolved;
+        copy_cstr(g_art_displayed_track, sizeof g_art_displayed_track, st->path);
         g_art_title_pending = 0;
         copy_cstr(last_path, sizeof(last_path), st->path);
-        /* art is already valid for this album - ensure the cover is shown (recovers
+        /* This picture is verified for the current track - ensure it is shown (recovers
          * if a previous in-flight load had swapped in the loading glyph and then a
          * same-album track arrived before that decode landed). */
         if(cover_note) lv_label_set_text(cover_note, LV_SYMBOL_AUDIO);
@@ -2206,24 +2413,32 @@ static void update_cover_for_path(const track_state_t *st)
     /* New album/art incoming: hide the now-wrong NP cover and show a loading glyph
      * while the worker decodes, so the previous album's art doesn't masquerade as
      * this track's. apply_art() (success) or clear_art_state() (fail) restores it.
-     * NB: do NOT touch cover_valid here - it's read by ui_current_cover_dsc() for the
-     * vinyl saver, which (like the Home thumb/backdrop) keeps last-good art until the
-     * new decode lands; only this prominent NP cover shows the loading state. */
+     * Hide the previous song on every consumer while identity is unresolved.
+     * Its allocated small pixels can be restored only after a full-byte match. */
     if(cover_note) lv_label_set_text(cover_note, LV_SYMBOL_REFRESH);
     g_np_small_valid = 0; g_np_cover_loading = 1;
     ui_np_cover_changed();
-    coverdsc_valid = 0;   /* the RAM decode is now the PREVIOUS album's - don't let the accent use stale art */
+    coverdsc_valid = 0;
+    cover_valid = thumb_valid = backdrop_valid = 0;
+    if(backdrop) lv_obj_add_flag(backdrop, LV_OBJ_FLAG_HIDDEN);
+    g_art_applied = 1; /* push hidden art even on a same-path redo/rescan */
 
     /* ALWAYS target the non-displayed buffer so an in-flight decode never
      * overwrites the /tmp BMP the shown art may still reference. */
     int nidx = displayed_idx ^ 1;
     art_req_t job; memset(&job, 0, sizeof job);
     job.idx = nidx;
+    /* The allocated previous pixels may be retained while hidden; only the
+     * worker's full-byte match may restore them for this new source. Books
+     * cannot borrow a different book's pixels. */
+    if(last_art_key[0] && (!mdb_is_book_path(st->path) || !strcmp(st->path, g_art_displayed_track)))
+        job.known = g_art_displayed.picture;
     copy_cstr(job.track, sizeof job.track, st->path);
     copy_cstr(job.art_key, sizeof job.art_key, art_key);
     copy_cstr(job.artist, sizeof job.artist, st->artist);
     copy_cstr(job.album,  sizeof job.album,  st->album);
     copy_cstr(job.title,  sizeof job.title,  st->title_ready ? st->title : "");
+    job.pos = st->pos_id; job.mode = ui_play_mode_now();
     job.online_only = online_only;
     job.online = st->title_ready && cfg_get_int("online_art", 0);
     snprintf(job.out,  sizeof job.out,  "/tmp/cover%d.bmp",    nidx);
@@ -2232,7 +2447,11 @@ static void update_cover_for_path(const track_state_t *st)
 
     int launch = 0;
     pthread_mutex_lock(&g_art_mu);
+    if(job.online_only && g_art_done_req==g_art_req &&
+       !strcmp(g_art_result.track,job.track))
+        job.resolution=g_art_result.resolution;
     g_art_req++;
+    copy_cstr(job.protected_previous,sizeof job.protected_previous,g_art_displayed_track);
     g_art_target = job;
     if(!g_art_inflight){ g_art_inflight = 1; launch = 1; }
     else art_cancel();   /* a worker is mid-decode on a now-stale track -> kill its decoder so it serves this
@@ -2289,12 +2508,23 @@ static void receiver_art_sync(void){
 /* main-thread timer: apply a finished decode (or re-clear) */
 void ui_art_poll(lv_timer_t *t)
 {
+    static int g_art_wait_network;
     (void)t;
+    if(g_art_wait_network && wifi_connectivity() == 1){
+        g_art_wait_network = 0;
+        if(cfg_get_int("online_art", 0)) ui_art_retry();
+    }
     receiver_art_sync();
+    receiver_art_key current_receiver; receiver_art_get(&current_receiver);
+    uint64_t library = ipc_library_epoch(), media = sd_io_generation();
+    if(!current_receiver.session && (g_art_library != library || g_art_media != media)){
+        ui_art_retry(); /* remount/rescan must revalidate even with no new player frame */
+        g_art_library = library; g_art_media = media; /* also settle an idle/no-track context */
+    }
     if(g_art_title_pending){
         track_state_t raw, st; ipc_get_state(&raw); playback_display_state(&st, &raw); update_cover_for_path(&st);   /* 15c: the view (a copy of raw while LOCAL) */
     }
-    { char got[512];                        /* Online Album Art saved a picture: redo that song's cover if it's on */
+    { char got[TRACK_PATH_MAX];                        /* Online Album Art saved a picture: redo that song's cover if it's on */
       if(netart_take_ready(got, sizeof got) && cfg_get_int("online_art", 0) && strcmp(got, last_path) == 0) ui_art_retry(); }
     int ready = 0, rc = -1; art_req_t res; unsigned done_req = 0, cur_req = 0;
     pthread_mutex_lock(&g_art_mu);
@@ -2311,6 +2541,11 @@ void ui_art_poll(lv_timer_t *t)
         else clear_art_state();
         return;
     }
+    if(res.resolution.epoch){
+        if(res.resolution.media != sd_io_generation() || g_art_library != ipc_library_epoch()) return;
+        if(!artcache_resolution_current(res.track, &res.resolution)) return;
+    }
+    if(strcmp(res.art_key, want_art_key)) return;
     if(res.is_clear)      clear_art_state();/* main already cleared; idempotent */
     else if(rc == 0 && res.from_net && !cfg_get_int("online_art", 0)){
         clear_art_state();                  /* an online picture that landed after the setting was turned off */
@@ -2319,7 +2554,25 @@ void ui_art_poll(lv_timer_t *t)
         /* only apply if the live track still wants this album - guards the rare
          * A(X)->B(Y, decoding)->C(X) race where Y would otherwise stomp correct X art. */
         if(strcmp(res.art_key, want_art_key) == 0){
-            apply_art(&res);
+            if(res.reuse){
+                /* No BMP copy, decode or descriptor rebinding for equal bytes. */
+                cover_valid = thumb_valid = backdrop_valid = 1;
+                coverdsc_valid = g_art_displayed_dsc_valid;
+                g_np_small_valid = 1; g_np_cover_loading = 0;
+                g_art_displayed = res.resolution;
+                copy_cstr(g_art_displayed_track, sizeof g_art_displayed_track, res.track);
+                track_state_t key_state = {0}; copy_cstr(key_state.path, sizeof key_state.path, res.track);
+                make_art_key(&key_state, last_art_key, sizeof last_art_key);
+                sharp_cover_set_identity(res.track, &res.resolution.picture, mdb_is_book_path(res.track));
+                ui_np_cover_changed(); np_sharp_demand(); g_art_applied = 1;
+                if(backdrop && g_np_backdrop_on) lv_obj_remove_flag(backdrop, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                if(!res.from_net){
+                    track_state_t key_state = {0}; copy_cstr(key_state.path, sizeof key_state.path, res.track);
+                    make_art_key(&key_state, res.art_key, sizeof res.art_key);
+                }
+                apply_art(&res);
+            }
             /* an online picture may be one song's own (not its album's) and must disappear when the setting goes off:
              * never reuse it for the next track of the album */
             if(res.from_net) last_art_key[0] = '\0';
@@ -2328,8 +2581,10 @@ void ui_art_poll(lv_timer_t *t)
     else {
         clear_art_state();
         /* no cover of its own: look it up online in the background (Settings > Library > Online Album Art) */
-        if(rc != -2 && res.online && cfg_get_int("online_art", 0) && strcmp(res.art_key, want_art_key) == 0)
-            netart_request(res.track, res.artist, res.album, res.title);
+        if(rc != -2 && res.online && cfg_get_int("online_art", 0) && strcmp(res.art_key, want_art_key) == 0){
+            if(wifi_connectivity() == 1) netart_request(res.track, res.artist, res.album, res.title);
+            else g_art_wait_network = 1;
+        }
     }
 }
 
@@ -2375,6 +2630,7 @@ static int pw_charging(void){
 /* 1 if the user-selected window currently allows background work. IDLE is mandatory
  * for every active mode: never decode while the user is actively looking at the screen
  * (heat-/UX-safety), even on charge. m1=when idle, m2=idle AND charging. */
+int ui_prewarm_enabled(void){ return g_prewarm_mode != 0; }
 static int pw_window_open(void){
     if(!sd_io_allowed()) return 0;
     int m=g_prewarm_mode; if(m==0) return 0;
@@ -2413,17 +2669,26 @@ static void *art_prewarm_worker(void *arg)
          * the non-thread-safe album/track caches); the worker only pops + decodes here, so no mdb
          * in-memory cache is touched off the UI thread. Runs regardless of the idle gate (users want
          * covers while browsing) but stays temp-throttled and serialized with the live NP decoder. */
-        char qpath[512];
-        if(pwq_pop(qpath, sizeof qpath)){
+        pthread_mutex_lock(&pwq_mu); pwq_background_paused = !pw_window_open(); pthread_mutex_unlock(&pwq_mu);
+        char qpath[TRACK_PATH_MAX]; int prove=0;
+        if(pwq_pop(qpath, sizeof qpath, &prove)){
             pw_wait_window(&hot);                        /* heat gate + yields to the live decode */
             char fp0[24];
             int cached = artcache_lookup(qpath, fp0, sizeof fp0);   /* one fingerprint: hit, or the key to store under */
-            if(cached == 1){ usleep(15*1000); continue; }   /* already cached (the UI thread no longer checks) */
+            art_resolution resolution;
+            if(cached == 1 && artcache_resolution(qpath, &resolution)){ usleep(15*1000); continue; }
+            /* Album preparation may trust a matching disk record. Nearby requests
+             * still establish RAM proofs for same-picture playback transitions. */
+            if(!prove && cached >= 0 && artcache_prepared(qpath, fp0)){ usleep(15*1000); continue; }
+            if(cached == 1) cached = 0;   /* already cached (the UI thread no longer checks) */
             if(cached == 0){
                 pthread_mutex_lock(&g_decode_mu);
-                int r = art_make_all(qpath, PC, PT, PB);
+                unsigned spec = art_spec_gen();
+                int r = -2;
+                if(!g_decode_waiting && (prove || pw_window_open()))
+                    r = artcache_resolve_if(fp0, qpath, PC, PT, PB, prove?3:2, spec, NULL, &resolution);
                 pthread_mutex_unlock(&g_decode_mu);
-                if(r == 0) artcache_put_if(qpath, fp0, PC, PT, PB);
+                (void)r;
             }
             usleep(120*1000);                            /* light pace; the temp gate is the real limiter */
             continue;
@@ -2441,33 +2706,42 @@ static void *art_prewarm_worker(void *arg)
         { int busy; pthread_mutex_lock(&g_art_mu); busy=g_art_inflight; pthread_mutex_unlock(&g_art_mu);
           if(busy){ usleep(300*1000); continue; } }
 
-        char path[300];
+        /* Finish bounded migration batches before our own accent writes change
+         * song.db's stamp. Demand interrupts between every one-set transaction. */
+        if(artcache_maintenance()){ usleep(120000); continue; }
+        char path[TRACK_PATH_MAX];
         if(!mdb_prewarm_next(id, &id, path, sizeof path)){   /* swept the whole library */
             id=0; pw_sleep(did_work?60:1800); did_work=0; continue;   /* rest longer if nothing pending (wake for queued covers) */
         }
         if(!path[0]) continue;
 
+        char prepared_key[24];
+        if(artcache_key(path,prepared_key,sizeof prepared_key)){ usleep(15000); continue; }
+        if(artcache_background_skip(path,prepared_key)){ usleep(15000); continue; }
         int have_art = artcache_has(path);
-        char acc_fp[24];
-        int need_acc = !ui_accent_is_static() && artcache_key(path, acc_fp, sizeof acc_fp) == 0
-                       && !mdb_song_accent_fresh(path, acc_fp);
+        char acc_fp[128]="";
+        int have_identity=artcache_accent_candidate(path,prepared_key,acc_fp,sizeof acc_fp);
+        int need_acc=!ui_accent_is_static() && (!have_identity || !mdb_song_accent_fresh(path,acc_fp));
         if(have_art && !need_acc){ usleep(15*1000); continue; }   /* already done -> light skip */
 
-        if(!have_art){
+        if(!have_art || !have_identity){
             char fp0[24];
             if(artcache_key(path, fp0, sizeof fp0) != 0){ usleep(300*1000); continue; }
             pthread_mutex_lock(&g_decode_mu);
-            int r = art_make_all(path, PC, PT, PB);
+            art_resolution resolved; unsigned spec = art_spec_gen();
+            int r = !g_decode_waiting && pw_window_open() ?
+                artcache_resolve_if(fp0, path, PC, PT, PB, 2, spec, NULL, &resolved) : -2;
             pthread_mutex_unlock(&g_decode_mu);
-            if(r == 0) artcache_put_if(path, fp0, PC, PT, PB);
-            else { usleep(300*1000); continue; }                  /* undecodable -> skip */
+            if(r != 0){ usleep(300*1000); continue; }
+            artcache_accent_key(&resolved.picture,acc_fp,sizeof acc_fp);
+            have_art=0;                  /* undecodable -> skip */
         }
         if(need_acc){
             /* Materialise THIS path's cover before reading it. If the cached read fails (SD vanished mid-
              * sweep), PC still holds the PREVIOUS track's image; computing+storing an accent from it would
              * mislabel this path permanently (a nonzero accent skips future correction). Only proceed on a
              * confirmed fresh cover for this path (a just-decoded !have_art cover is already in PC). */
-            int cover_ready = have_art ? (artcache_get_cover(path, PC) == 0) : 1;   /* the accent reads only the cover */
+            int cover_ready = have_art ? (artcache_get_cover_background(path, PC) == 0) : 1;   /* the accent reads only the cover */
             if(cover_ready){
                 uint8_t *buf = malloc(CBMP*CBMP*4);
                 if(buf){
@@ -2566,6 +2840,7 @@ const lv_font_t *ui_font_cjk(int size)
         s_font[size] = *base;
         s_font[size].fallback = next;
     }
+    indic_font_register(&s_font[size], size);
     return &s_font[size];
 }
 
@@ -2763,6 +3038,7 @@ static void receiver_view_tick(lv_timer_t *timer){
         rp_sync(&g_rx_rp, &m, !transport_known || playing, now);
         rp_get(&g_rx_rp, now, &po);
     }
+    if(screen_current() != SCR_NOWPLAYING || !ui_screen_backlight_on()) return;   /* dimmed still shows: only a dark screen skips drawing */
     const char *heading = g_rx_return || (pending && r.target == RECEIVER_SOURCE_LOCAL) ? "Returning to Local..." :
         pending ? "Starting AirPlay..." : !wifi ? "Wi-Fi disconnected" :
         failed ? (g_rx_recovery ? "Player state uncertain" : "Couldn't start AirPlay") : "AirPlay Receiving";
@@ -2805,11 +3081,12 @@ static void receiver_view_tick(lv_timer_t *timer){
         if(lv_obj_get_style_max_height(l, 0) < LV_COORD_MAX) continue;   /* a theme capped its height (a title of up to N lines) */
         int32_t h = lv_label_get_long_mode(l) == LV_LABEL_LONG_WRAP ?
             LV_SIZE_CONTENT :
-            lv_font_get_line_height(lv_obj_get_style_text_font(l, 0)) +
+            indic_line_height(st.text[i],lv_obj_get_style_text_font(l, 0)) +
             lv_obj_get_style_pad_top(l, 0) +
             lv_obj_get_style_pad_bottom(l, 0);
         if(lv_obj_get_style_height(l, 0) != h) lv_obj_set_height(l, h);
     }
+    if(receiving) indic_stack_fit(g_rx_text[1],g_rx_text[2],g_rx_text[3]);
     /* Default's fill is the ring (a theme draws its own from the parts); no trusted model: no fill, no times. */
     set_label_text_changed(g_rx_elapsed, st.elapsed); set_label_text_changed(g_rx_remain, st.remain);
     if(!kit->receiver){
@@ -2849,6 +3126,7 @@ static void receiver_view_create(lv_obj_t *root){
     g_rx_view = lv_obj_create(root); lv_obj_remove_style_all(g_rx_view);
     lv_obj_set_size(g_rx_view,360,360); lv_obj_set_style_bg_color(g_rx_view,RXC(CANVAS),0);
     lv_obj_set_style_bg_opa(g_rx_view,LV_OPA_COVER,0);
+    kit_keep(g_rx_view);   /* a screen ground, not a card; children still take their theme */
     if(theme_kit()->receiver){   /* the theme's own ground: its texture, unless it draws Now Playing plain */
         theme_screen_bg(g_rx_view);
         if(theme_screen_plain(THEME_PLAIN_NOWPLAYING)) theme_screen_solid(g_rx_view);
@@ -2863,7 +3141,7 @@ static void receiver_view_create(lv_obj_t *root){
     lv_obj_remove_flag(arc,LV_OBJ_FLAG_CLICKABLE);
     const lv_font_t *fonts[] = {ui_font_cjk(12),ui_font_cjk(20),ui_font_cjk(16),ui_font_cjk(14),ui_font_cjk(12)};
     for(int i=0;i<5;i++){
-        g_rx_text[i] = lv_label_create(g_rx_view); lv_obj_set_width(g_rx_text[i],i==3?230:280);
+        g_rx_text[i] = indic_label_create(g_rx_view); lv_obj_set_width(g_rx_text[i],i==3?230:280);
         style_text(g_rx_text[i],fonts[i],(i==0?RXC(ACCENT_PRIMARY):i==1?RXC(TEXT_PRIMARY):RXC(TEXT_SECONDARY)));
         lv_label_set_long_mode(g_rx_text[i],i==3?LV_LABEL_LONG_WRAP:LV_LABEL_LONG_DOT);
         lv_obj_align(g_rx_text[i],LV_ALIGN_TOP_MID,0,0);
@@ -2938,6 +3216,12 @@ void ui_host_receiver(const char *scene){
         snprintf(g_rxh.m.title, sizeof g_rxh.m.title, "%s", lng ? "A Very Long Title That Cannot Possibly Fit On One Line" : "Glass Harbour");
         snprintf(g_rxh.m.artist, sizeof g_rxh.m.artist, "%s", lng ? "The Extraordinarily Long Named Lanterns Ensemble" : "The Lanterns");
         snprintf(g_rxh.m.album, sizeof g_rxh.m.album, "%s", lng ? "Night Ferry To The Far Side Of The Harbour Deluxe Edition" : "Night Ferry");
+    }
+    const char *override = getenv("RTL_RECEIVER_TITLE");
+    if(override && g_rxh.m.item_revision) {
+        snprintf(g_rxh.m.title,sizeof g_rxh.m.title,"%s",override);
+        snprintf(g_rxh.m.artist,sizeof g_rxh.m.artist,"%s",getenv("RTL_RECEIVER_ARTIST") ? getenv("RTL_RECEIVER_ARTIST") : override);
+        snprintf(g_rxh.m.album,sizeof g_rxh.m.album,"%s",override);
     }
     for(int i = 0; i < 148 * 148; i++) g_rxh.px[i] = 0xff000000u | (uint32_t)(i % 148 + 60) << 16 | (uint32_t)(i / 148 + 40) << 8 | 110u;
     g_rxh.dsc.header = (lv_image_header_t){ .magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_ARGB8888, .w = 148, .h = 148, .stride = 592 };
@@ -3146,7 +3430,7 @@ void ui_create(lv_obj_t *root)
     lv_label_set_text(beam_icon, BEAM_GLYPH);
     lv_obj_center(beam_icon);
 
-    title = lv_label_create(scr);
+    title = indic_label_create(scr);
     g_title_scroll_mode = LV_LABEL_LONG_CLIP;
     lv_obj_set_width(title, 260);
     style_text(title, TF(USER_20), TC(TEXT_PRIMARY));
@@ -3154,14 +3438,14 @@ void ui_create(lv_obj_t *root)
     lv_label_set_text(title, tr("No Track"));
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 198);
 
-    artist = lv_label_create(scr);
+    artist = indic_label_create(scr);
     lv_obj_set_width(artist, 238);
     style_text(artist, TF(USER_16), TC(TEXT_SECONDARY));
     lv_label_set_long_mode(artist, LV_LABEL_LONG_DOT);
     lv_label_set_text(artist, "");
     lv_obj_align(artist, LV_ALIGN_TOP_MID, 0, 226);
 
-    album = lv_label_create(scr);
+    album = indic_label_create(scr);
     lv_obj_set_width(album, 218);
     style_text(album, TF(USER_14), TC(TEXT_MUTED));
     lv_label_set_long_mode(album, LV_LABEL_LONG_DOT);
@@ -3283,7 +3567,7 @@ void ui_create(lv_obj_t *root)
     lv_obj_set_style_bg_opa(scrim, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
 
-    fsart_title = lv_label_create(fsart);
+    fsart_title = indic_label_create(fsart);
     lv_obj_set_width(fsart_title, 240);   /* round-screen chord at y~310 is ~249px wide; 300 overran the bezel */
     style_text(fsart_title, TF(USER_20), TC(TEXT_PRIMARY));
     lv_obj_set_style_text_align(fsart_title, LV_TEXT_ALIGN_CENTER, 0);
@@ -3291,7 +3575,7 @@ void ui_create(lv_obj_t *root)
     lv_obj_align(fsart_title, LV_ALIGN_BOTTOM_MID, 0, -50);
     lv_obj_clear_flag(fsart_title, LV_OBJ_FLAG_CLICKABLE);
 
-    fsart_artist = lv_label_create(fsart);
+    fsart_artist = indic_label_create(fsart);
     lv_obj_set_width(fsart_artist, 176);   /* chord at y~334 is only ~186px wide; 280 was clipped by the bezel */
     style_text(fsart_artist, TF(USER_16), TC(TEXT_SECONDARY));
     lv_obj_set_style_text_align(fsart_artist, LV_TEXT_ALIGN_CENTER, 0);
@@ -3363,11 +3647,11 @@ void ui_update(const track_state_t *st)
 
     if(st == NULL || !st->have_track) {
         last_path[0] = '\0';
-        g_stat_path[0] = '\0';   /* clear so a later replay of the same track counts as a new play */
         update_accent_seed(st);   /* no-track -> neutral light grey (resets seed + applies once via the gate) */
 
-        set_label_text_changed(title, "No Track");
-        set_label_text_changed(artist, "");
+        /* the player reports a track whose path this build cannot carry: say so, never keep the previous song */
+        set_label_text_changed(title, st && st->path_unavailable ? "Track unavailable" : "No Track");
+        set_label_text_changed(artist, st && st->path_unavailable ? "Path too long" : "");
         set_label_text_changed(album, "");
         if(album_pos) set_label_text_changed(album_pos, "");
         album_beam_style(0, 0);
@@ -3389,10 +3673,8 @@ void ui_update(const track_state_t *st)
     update_cover_for_path(st);   /* first: invalidates stale RAM art on a new album */
     update_accent_seed(st);      /* then: art-accent if THIS track's cover is ready, else text-hash */
 
-    ui_record_play(st);
-
-    set_label_text_changed(title, st->title[0] ? st->title : "Untitled");
-    set_label_text_changed(artist, st->artist[0] ? st->artist : "");
+    int metadata_changed = set_label_text_changed(title, st->title[0] ? st->title : "Untitled");
+    metadata_changed |= set_label_text_changed(artist, st->artist[0] ? st->artist : "");
     /* keep the full-screen art view fresh while it's open: text every update, image only on a
      * genuine track change (a PNG decode is too costly to do every position tick). */
     if(fsart_on){
@@ -3423,10 +3705,11 @@ void ui_update(const track_state_t *st)
                 else            snprintf(ab, sizeof ab, "%s", st->playing_num);
             } else ab[0] = '\0';
         }
-        set_label_text_changed(album, ab);
+        metadata_changed |= set_label_text_changed(album, ab);
         album_beam_style(beaming, ui_view_is_book(st->path));
         if(pos_own_line) set_label_text_changed(album_pos, pos_text);
     }
+    if(metadata_changed) indic_stack_fit(title, artist, album);
     /* honour an optimistic-favourite hold so a1 position frames don't bounce the heart back */
     snprintf(g_np_curpath, sizeof g_np_curpath, "%s", st->path);
     int fav_show = st->is_favorite;
@@ -3607,11 +3890,18 @@ void ui_show_volume(int vol)
         lv_obj_set_style_text_color(g_vol_num, TC(TEXT_PRIMARY), LV_PART_MAIN);
 
         g_vol_target = lv_label_create(g_vol_panel);
-        lv_obj_set_width(g_vol_target, 150); lv_label_set_long_mode(g_vol_target, LV_LABEL_LONG_DOT);
+        /* Fit the entire two-line box within the arc's 82 px inner radius, with 4 px clearance. */
+        int height = 2 * lv_font_get_line_height(TF(UI_12)) + 2;
+        int bottom = 48 + (height + 1) / 2;
+        int chord = 2 * (int)sqrt(82 * 82 - bottom * bottom) - 8;
+        lv_obj_set_size(g_vol_target, chord, height);
+        lv_label_set_long_mode(g_vol_target, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_line_space(g_vol_target, 2, 0);
         lv_obj_set_style_text_align(g_vol_target, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_font(g_vol_target, TF(UI_12), 0);
         lv_obj_set_style_text_color(g_vol_target, TC(TEXT_SECONDARY), 0);
         lv_obj_align(g_vol_target, LV_ALIGN_CENTER, 0, 48);
+        kit_keep(g_vol_target);   /* keep the measured face and line spacing in every theme */
 
         g_vol_timer = lv_timer_create(vol_hide_cb, 1800, NULL);
         lv_timer_pause(g_vol_timer);
@@ -3631,7 +3921,14 @@ void ui_show_volume(int vol)
         lv_label_set_text(g_vol_num, b);
     }
     lv_obj_remove_flag(g_vol_panel, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(g_vol_target, remote ? (receiver < 0 ? tr("Volume unavailable") : ui_cast_device()) : "");
+    const char *target = remote ? (receiver < 0 ? tr("Volume unavailable") : ui_cast_device()) : "";
+    char fitted[1024];
+    const lv_font_t *font = lv_obj_get_style_text_font(g_vol_target, 0);
+    int tracking = lv_obj_get_style_text_letter_space(g_vol_target, 0);
+    int room = lv_obj_get_style_width(g_vol_target, 0);
+    if(header_width(target, font, tracking) > room &&
+       header_split(target, fitted, sizeof fitted, font, tracking, room, 1)) target = fitted;
+    lv_label_set_text(g_vol_target, target);
     lv_obj_move_foreground(g_vol_panel);
     lv_timer_reset(g_vol_timer);
     lv_timer_resume(g_vol_timer);
@@ -3639,4 +3936,27 @@ void ui_show_volume(int vol)
 
 void ui_refresh_remote_volume(void){
     if(g_vol_panel && lv_obj_is_valid(g_vol_panel) && !lv_obj_has_flag(g_vol_panel, LV_OBJ_FLAG_HIDDEN) && playback_source() != PB_SRC_LOCAL) ui_show_volume(0);
+}
+
+/* Lifecycle gating only. Active receiver transitions continue in darkness. */
+void ui_receiver_poll_sync(void){
+    if(!g_rx_timer)return;
+    receiver_snapshot r;rx_snapshot(&r);
+    int active=r.target==RECEIVER_SOURCE_AIRPLAY || r.source==RECEIVER_SOURCE_AIRPLAY ||
+        g_rx_return || g_rx_visible || rx_pending();
+    if(active){
+        /* Preserve the former dark 200-ms observation cadence once settled;
+         * transitions keep their 100-ms deadline even with the panel off. */
+        lv_timer_set_period(g_rx_timer,ui_screen_backlight_on() || rx_pending() || g_rx_return ? 100 : 200);
+        lv_timer_resume(g_rx_timer);
+    }else lv_timer_pause(g_rx_timer);
+}
+
+/* The volume overlay sits on the top layer and is clickable, but it is a status readout, not a dialog: it must not take a
+ * gesture that starts outside it. ui_volume_panel_is names it for screen_dialog_open; ui_volume_hit = it is up under (x,y). */
+int ui_volume_panel_is(const lv_obj_t *o){ return o && o == g_vol_panel; }
+int ui_volume_hit(int x, int y){
+    lv_point_t p = { .x = x, .y = y };
+    return g_vol_panel && lv_obj_is_valid(g_vol_panel) && !lv_obj_has_flag(g_vol_panel, LV_OBJ_FLAG_HIDDEN) &&
+           lv_obj_hit_test(g_vol_panel, &p);
 }

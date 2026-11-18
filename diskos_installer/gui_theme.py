@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Colour tokens, type scale, ttk styling, drawn controls and display assets for the installer window.
 
 Every visual decision lives here so every screen (Welcome, confirm, flashing, result) shares it:

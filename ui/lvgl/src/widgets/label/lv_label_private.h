@@ -31,6 +31,12 @@ extern "C" {
 struct lv_label_t {
     lv_obj_t obj;
     char * text;
+    const lv_label_layout_provider_t *layout_provider;
+    uintptr_t layout_handle;
+    uintptr_t layout_context;
+    bool layout_active;
+    bool layout_candidate;
+    bool layout_rtl;
     union {
         char * tmp_ptr; /**< Pointer to the allocated memory containing the character replaced by dots */
         char tmp[LV_LABEL_DOT_NUM + 1]; /**< Directly store the characters if <=4 characters */

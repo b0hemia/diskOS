@@ -16,12 +16,14 @@ int  screen_home(void);
 /* A swipe up that STARTS at or below this row (the bottom 40 px of the 360 px glass) is the Home swipe. Now Playing's
  * seek never arms from here (ui_np_seek_press). */
 #define HOME_SWIPE_Y 320
+int  screen_dialog_open(void);                   /* screen_modal_open() minus the volume overlay: a real dialog, menu or panel owns touch */
 int  screen_modal_open(void);                    /* a dialog, menu or other touch-taking panel is on the top layer */
 int  screen_on_drag_control(int x, int y);       /* the point is on a slider, arc, roller or sideways scroller */
 int  screen_anim_on(void);   /* the Animations setting as the screen manager applies it */
 void screen_set_anim(int on);
 int  screen_current(void);
 void ui_toast(const char *msg);
+void ui_clock_text_ago(uint64_t age_ms, char *out, int cap);   /* time of day age_ms ago, clock format */
 void splash_start(void);
 /* the "something" block-matrix clock (home.c): handle 0 = Home, 1 = screensaver */
 int  mclock_new(int h, lv_obj_t *parent, int y);
@@ -147,6 +149,8 @@ void wifi_info_open(void);
 void bt_create(lv_obj_t *root);
 void bt_open(void);
 int  bt_toggle(void);          /* Quick Settings tile short-press: flip BT + persist, returns new state */
+int bt_radio_cached(void);     /* UI-published radio observation */
+int bt_radio_probe(void);      /* native rfkill; UI-published intent fallback, worker-safe */
 int  bt_radio_on(void);        /* cheap actual BT-enabled state (rfkill), for the status icon + QS tile */
 void bt_power_set(int on);    /* the one power path: the page switch and the Settings row */
 int  bt_power_pending(void);   /* a start from bt_power_set is still waiting for the adapter */
@@ -167,6 +171,7 @@ void library_open_album(const char *name);
 void library_open_artist(const char *name);
 void albumwall_create(lv_obj_t *root);     /* SCR_ALBUMWALL: cover-flow album browser */
 void albumwall_refresh(void);              /* rebuilt per entry from the album list */
+void albumwall_wake(void);
 void albumwall_prewarm_seed(void);         /* MAIN thread: (re)start the incremental album-cover prewarm enqueue */
 void albumwall_step(int dir);              /* +1 next / -1 prev album (discrete: keys / demo) */
 void albumwall_drag_begin(int px);         /* finger down: start a continuous drag from press x */
@@ -209,7 +214,8 @@ void saver_dark(void);         /* the panel went dark: same, and nothing Custom 
 void saver_wake(void);         /* the panel is lit again: show the one deferred Custom message, if due (main.c) */
 int  saver_wants_bright(void);/* 1 = keep full brightness (vinyl art showcase), don't dim */
 int  ui_run_bounded(char *const argv[], int timeout_ms);  /* external cmd as a killable child w/ hard timeout */
-void ui_decode_lock(void);    /* serialize an ffmpeg artwork decode against the other decoders (OOM guard) */
+void ui_decode_lock(void);
+int ui_decode_speculative(unsigned *gen);    /* serialize an ffmpeg artwork decode against the other decoders (OOM guard) */
 void ui_decode_unlock(void);
 void tune_refresh(void);      /* re-sync Tune panel Play Mode/EQ labels on show */
 
@@ -267,6 +273,7 @@ void kbinput_open_password(const char *title, const char *initial, kbinput_done_
 int  kbinput_active(void);   /* 1 while the modal keyboard is up (suppress gestures) */
 /* search */
 void search_create(lv_obj_t *root);
+void search_refresh(void);
 void ui_clock_refresh(void);
 /* IPC decode seams (frames wired in once decoded) */
 int ui_seek_to(long ms);   /* returns 0 if the seek frame was queued, -1 if the send failed */
@@ -289,6 +296,7 @@ void ui_glyph_center_ink(lv_obj_t *label);                /* a one-icon label ce
 int  ui_pp_icon_playing(int real_playing);   /* returns the play/pause glyph state: prediction if held, else real */
 const char *ui_eq_name(int i);   /* EQ preset name for index 0..20 (drawer toast) */
 void ui_rescan_library(void);
+int ui_theme_reload_setting(const char *screen,const char *key,int previous);
 int  ui_theme_reload(const char *screen);   /* re-launch the UI to apply a theme change (main.c) */
 int  ui_play_mode_now(void);           /* the play mode the player is using (0..4), -1 unknown (main.c) */
 int  ui_queue_jump(int ord1);          /* Up Next: type-0 jump to 1-based position in the current queue (0 = sent) */
@@ -312,6 +320,7 @@ void ui_start_art_prewarm(void);          /* spawn the background cover/accent p
 int  ui_prewarm_enqueue(const char *path); /* MAIN thread: queue a track path for background cover decode; 1=queued/dup, 0=full */
 void ui_set_accent_config(int mode, int rgb);  /* 0=dynamic / 1=static(rgb); applies immediately */
 int  ui_accent_is_static(void);
+int ui_prewarm_enabled(void);
 void ui_set_prewarm_mode(int m);          /* 0=covers only 1=+per-track sweep when idle 2=+sweep when idle & charging */
 int  ui_run_cap_bounded(const char *cmd, char *out, int cap, int timeout_ms);   /* bt.c: popen-like capture, killed at timeout */
 int  bt_radio_on(void);              /* current mode; 0 = Album Art Cache off */
@@ -325,6 +334,7 @@ void ui_np_pp_filled(int on);            /* theme: the play key is filled with t
 void ui_np_backdrop_enabled(int on);     /* theme: 0 = no blurred cover behind Now Playing */
 int  ui_np_seek_move(int x, int y);
 int  ui_np_seek_release(int x, int y);
+void ui_np_seek_cancel(void);
 /* full-screen album-art view (stock cover.png reuse): tap the NP cover to open */
 void ui_np_fsart_open(void);
 void ui_np_fsart_close(void);
@@ -335,6 +345,8 @@ void saver_vinyl_spin(int want);          /* drive saver vinyl spin (from main l
 const char *ui_current_thumb_src(void);
 void ui_set_np_style(int vinyl);   /* 0 = cover (rounded square), 1 = vinyl (disc) */
 void ui_vinyl_spin(int want);      /* drive the vinyl spin from the main loop */
+int  ui_volume_panel_is(const lv_obj_t *o);   /* the volume overlay (a clickable top-layer readout, not a dialog) */
+int  ui_volume_hit(int x, int y);             /* the volume overlay is up and (x,y) lies on it */
 void ui_show_volume(int vol);      /* show the on-screen volume bar (auto-hides) */
 /* home */
 void home_create(lv_obj_t *root);
@@ -414,4 +426,7 @@ int  library_drill_context(int *list_type, char *name, int cap);
 int  library_back(void);
 /* the next Library entry starts at its top-level menu, as a fresh start does (Home swipe) */
 void library_reset_top(void);
+#include "art_identity.h"
+/* Verified picture reuse; books additionally retain full path ownership. */
+void sharp_cover_set_identity(const char *path, const art_picture_id *picture, int book);
 #endif

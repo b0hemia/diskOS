@@ -4,6 +4,153 @@ All notable changes to diskOS are documented here.
 
 Entries follow the Keep a Changelog format, with Added, Changed, and Fixed categories where applicable.
 
+## [1.2.3] - 2026-11-19
+
+Adds low-battery notices with a safe turn-off at empty, sort tags, featured artists as their own
+artists, WAV tags, Gurmukhi, Devanagari, Urdu and Hebrew text shaping, each song's own cover art
+and a Weather refresh, makes the Disc's background work, long library lists and screen wakes do
+less work, and fixes Now Playing, the side key and Stop while beaming, power-key shutdown,
+Bluetooth, Wi-Fi, Custom EQ on V2.57, idle power-off, long file paths, playlists, Last.fm,
+resetting settings and installer handling.
+
+1.2.2 users can install the signed app update from Settings > Device > Update diskOS if updates
+are allowed. It includes the matching cover helper and delivers the 1.2.3 UI changes without a
+full flash. App updates do not replace the boot script or the image's minimum update epoch. The
+boot-log correction and newer image minimum come with a full flash using the 1.2.3 installer.
+Fresh installs and older versions use the installer.
+
+### Added
+
+- Low battery: notices warn at 10% or below and 5% or below, and announce 100% after charging has
+  been observed. On V2.40 and V2.57, a valid 0% reading while not charging shows a "Battery empty"
+  dialog and starts a 30-second countdown ("The Disc turns off in 30 s to keep your music card
+  safe."). "Turn off now" skips the countdown, then follows the same playback-stop and card-flush
+  checks. Detecting charging, a reading above 0%, or unavailable battery evidence cancels the
+  countdown. If the checks fail, diskOS keeps card access closed, withholds its power-off request
+  and asks you to restart. Other firmware gets notices without diskOS's empty-battery shutdown.
+- Sort tags: artist, album artist and album sort values (ID3 TSOP/TSO2/TSOA and ALBUMARTISTSORT,
+  Vorbis comments in FLAC/Ogg/Opus, MP4, WMA, APE, and ID3 tags in AAC, AIFF, DSF and WAV) order
+  Artists, Albums, A-Z and Album Wall. Display names do not change, and untagged files sort as
+  before. Settings > Library > Maintenance shows "Rescan for sort tags" (in place of Rescan
+  Library) until they have been read once.
+- Featured artists: "feat.", "ft." and "featuring" credits, including "(feat. X)", list the guest
+  as their own artist. Album Artist names stay exactly as tagged.
+- WAV files read their title, artist, album, genre and track tags (ID3 chunk first, then
+  LIST/INFO), with album artist and disc number from ID3. Rescan the library to read them.
+- Gurmukhi and Devanagari names are shaped correctly, and Urdu and Hebrew names read right to
+  left, with long names scrolling in lists (#20). Latin and CJK text are unchanged.
+- Now Playing shows each song's own embedded cover instead of the album's first cover.
+- Weather shows when it last updated, with a Refresh button.
+
+### Changed
+
+- Long lists (songs, albums, artists, genres, playlists, Files) reuse a small pool of rows,
+  reducing display memory.
+- Waking the screen keeps an unchanged cover, with no loading icon and no second decode.
+- Album covers share one cache on the card. The new shared cache is capped at 4 GiB and refuses
+  growth that would leave less than 1 GiB free. Identical pictures are stored once, older covers
+  (except protected ones, such as nearby covers) are removed when space is needed, and old cache
+  files are retired during idle maintenance.
+- Background album-cover preparation follows the Album Art Cache setting (When Idle, or Idle &
+  Charging).
+- With the screensaver off, Screen Off happens at the chosen time.
+- Finished helper processes no longer wake the CPU every millisecond, and after a restart
+  background preparation skips covers already prepared on the card.
+- Wi-Fi, Bluetooth and several UI workers use event notifications and scheduled deadlines,
+  reducing repeated background checks. Bluetooth restore at startup waits for the player's answer,
+  and a Wi-Fi scan asked for during a connection hold runs after it.
+- Wi-Fi scanning, connection and radio work run in the background instead of blocking touch
+  handling.
+- The Vinyl screensaver starts at a new angle each time it opens.
+- Beam: one Disc volume press moves the receiver by one step, not two.
+- The AirPlay receiving screen stops redrawing while it is hidden or the screen is off.
+- Repeated Cast artwork requests reuse one prepared cover.
+- The installer and tools are now licensed under GPL-3.0-or-later, the same as the UI. Earlier releases stay under MIT; see NOTICE.md.
+
+### Fixed
+
+- Now Playing: the play/pause icon holds steady while a seek lands; the mode button never starts a
+  ring seek (#32); the timer no longer flashes 0:00 after a play mode change.
+- Picking a chapter or an Up Next row no longer stacks extra copies of Now Playing; one Back
+  returns to where you came from (#32).
+- A touch that wakes the screen only wakes it, and cannot press what is underneath (#32).
+- Idle power-off: only real volume key presses count as activity (V2.57), so a paused Disc powers
+  off on time; a failed power-off is retried.
+- Custom EQ on V2.57 edits the ten-band USER presets one band at a time like the stock editor,
+  keeping the other bands and their Q values; advanced presets stay protected. Flat no longer
+  reports "Couldn't apply EQ". The saved EQ is sent again when the player restarts, and a Gapless
+  choice made in the stock UI is used until you choose one in diskOS (#32).
+- Wi-Fi: a mistyped password is never saved, starting the UI no longer drops the connection, the
+  details screen stays steady while it updates, Forget acts on the network you opened, and a
+  connection whose settings could not be saved says so.
+- Bluetooth: removing a device that is not playing keeps the current output; turning Bluetooth off
+  says so if the output cannot switch back; a reconnect keeps the saved resume position. A
+  temporary Bluetooth audio rebuild keeps a manual switch back to Analog.
+- Library: a scan never commits after a card swap; a lost scan transaction keeps the library;
+  Search and Cover Flow keep up with library reloads, and Cover Flow keeps the selected album;
+  card writes are refused when the card is not mounted; navigation gestures wait for open dialogs.
+  Library lists such as Albums, Favourites and Playlists no longer show "Library busy" just
+  because the player is reading the library at the same time.
+- Playlists: export never overwrites a file it did not write; removing a song removes exactly the
+  row pressed. Long playlist file names import under distinct names.
+- Books: a seek made after a restart is kept; Chapters follow the playing chapter.
+- Settings that use the shared save path no longer apply after a failed save, and an unconfirmed
+  save says "Saved - not confirmed yet"; the time zone is kept when a reload is refused; manual
+  clock saves wait for an earlier save.
+- Reset diskOS Settings can restart a partly completed reset; when Bluetooth is off, it explains
+  that clearing nicknames waits until Bluetooth is turned on.
+- Theme changes wait for radio work to settle and restore the previous choices if they cannot
+  complete.
+- Last.fm keeps unsent plays on read errors and on account or key errors, and sends no late Now
+  Playing after you pause or switch to AirPlay.
+- Online Album Art retries a missing cover after Wi-Fi reconnects.
+- Installed apps keep longer names and launch paths.
+- Closing Lyrics stops an old lookup from starting another request.
+- Lyrics skip a leading byte-order mark, and online lyrics are found when the reply has spaces
+  around its fields.
+- Favourites: a heart that fails to reach the player no longer shows success.
+- Plays are recorded while the screen is off.
+- Weather keeps the last reading when a new one is invalid, and does not fetch while off.
+- The Vinyl screensaver keeps showing the playing song's cover.
+- The screensaver keeps unsaved lock-screen edits and does not open over a dialog; an untouched
+  colour slider saves nothing.
+- A build whose size differs from the pending trial no longer shows that trial's Keep / Go back
+  prompt.
+- AirPlay: leaves its queue cleanly. Cast: rejects oversized positions, and the picker keeps found
+  devices.
+- Cast: a receiver Stop shows stopped on the Disc. Disc Play reloads the same song from its last
+  usable reported position, which can be earlier than the actual stop.
+- On V2.57, the Disc's play/pause key pauses and resumes the Cast or AirPlay receiver while
+  beaming, without starting local playback. Other firmware keeps its previous key behavior.
+- Power key: when the player announces shutdown, diskOS stops new card work, stops cover helpers
+  and image previews, and attempts to drain and flush pending work before the player turns off. An
+  existing shutdown is joined. If the player restarts, card access resumes and the library is
+  checked again.
+- A shutdown failure while the screen is off shows its restart notice when the screen wakes.
+- Long file paths: diskOS carries complete absolute track paths of up to 1023 bytes through the
+  library, playback display, lyrics, Song Info, playlists, artwork and Beam, including audiobook
+  resume and play history. Oversized paths are refused or skipped instead of cut short; an
+  oversized current-track report shows Track unavailable / Path too long.
+- Dialogs and menus own the whole touch that starts on them: with one open, a press no longer
+  seeks Now Playing, scrolls the rim, drags Cover Flow or swipes the screen behind it, and a
+  dialog that opens during a gesture cancels what the gesture started. The volume overlay allows
+  seeking and scrolling with touches that start outside it.
+- Artists: a stray control character between commas in an artist tag no longer shows up as its own
+  blank artist.
+- Installer: the flash check now rejects a page the Disc's memory reports as unreadable instead of
+  accepting it.
+- Installer (Linux): if the bundled squashfs tools fail their check (seen on Fedora 44), the
+  installer checks a complete pair of system tools the same way and uses them (#33). The bundled
+  tools are now built with musl and no longer crash there.
+- Installer: during an update the boot log no longer says the stock UI will run; it says the old
+  UI is being replaced and reports the outcome on its own line.
+- Wi-Fi, Beam, EQ and power messages (low and full battery, the empty-battery dialog and shutdown
+  messages), the sort-tag rescan label and "Couldn't apply the theme now" are translated, and the
+  Vol Keys hint is translated in Italian and Russian.
+- Small fixes: the receiver name under the volume arc wraps inside the arc, Source picker titles
+  stop before the selection mark, the AirPlay receiving screen has no card edge ring, and Add to
+  Playlist messages are never hidden by the picker.
+
 ## [1.2.2] - 2026-10-24
 
 Adds Beam (play the Disc's music on Cast and AirPlay speakers and TVs), AirPlay receiving from an
@@ -213,7 +360,7 @@ flash" need the complete 1.2.1 installer.
 
 ### Added
 
-- [Public website](https://b0hemia.github.io/diskos/) with screenshots, a feature tour
+- [Public website](https://b0hemia.github.io/diskOS/) with screenshots, a feature tour
   and installation links.
 - Ogg Opus support for .opus, .oga and .ogg files: the scanner reads their tags and
   available lengths, and playback uses the Disc's stock player. When the player's

@@ -37,6 +37,7 @@
  * Titles are complete, successfully decoded strings supplied by the caller.
  */
 #include "opustitle_worker.h"
+#include "ui_wake.h"
 #include "sdio.h"
 #include <pthread.h>
 #include <stdatomic.h>
@@ -95,6 +96,7 @@ static void *worker(void *ctx){
         pthread_mutex_lock(&w->mu);
         w->mail=c; w->mailbox=1;
         pthread_mutex_unlock(&w->mu);
+        ui_notify(UI_WAKE_IPC|UI_WAKE_ART);
     }
     return NULL;
 }

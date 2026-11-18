@@ -58,7 +58,7 @@ against the packaged dependency inventory.
 
 ## Exact enabled-ZIP qualification
 
-Clone the candidate installer revision at version 1.2.2. In MSYS2 bash, from
+Clone the candidate installer revision at version 1.2.3. In MSYS2 bash, from
 the clone root, with the pinned packages already installed, run:
 
 ```sh

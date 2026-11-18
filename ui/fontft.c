@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "fontft.h"
+#include "fontft_internal.h"
 #include "i18n.h"
 #include <pthread.h>
 #include <stdio.h>
@@ -9,18 +10,10 @@
 #include FT_FREETYPE_H
 
 #define TTC_PATH "/usr/project/config/fonts/SourceHanSans-Regular.ttc"
-#define CACHE_LIMIT (1024u * 1024u)
+#define CACHE_LIMIT (1024u * 1024u - sizeof buckets - sizeof charmap)
 #define ENTRY_LIMIT 4096u
 
-typedef struct glyph {
-    struct glyph *prev, *next, *hnext;
-    uint32_t codepoint;
-    uint8_t px;
-    uint16_t width, height, advance;
-    int16_t left, bottom;
-    size_t bytes;
-    uint8_t bitmap[];
-} glyph_t;
+typedef fontft_glyph glyph_t;
 
 static FT_Library library;
 static FT_Face face;
@@ -28,14 +21,16 @@ static FT_Face face;
 static lv_font_t fonts[141];
 static glyph_t *newest, *oldest;
 static glyph_t *buckets[256];
+/* Pixel-independent nominal cmap cache; included in the shared byte budget. */
+static struct { uint32_t cp, index; } charmap[4096];
 static size_t used_bytes;
-static unsigned entries;
+static unsigned entries, raster_count;
 static pthread_t lv_thread;
 static int initialized, enabled;
 
-static unsigned bucket_for(uint32_t cp, uint8_t px)
+static unsigned bucket_for(FT_Face f, uint32_t id, uint8_t px, int32_t flags)
 {
-    return (cp * 2654435761u ^ px * 97u) & 255u;
+    return ((uintptr_t)f ^ id * 2654435761u ^ px * 97u ^ (uint32_t)flags) & 255u;
 }
 
 static int on_lv_thread(void)
@@ -64,10 +59,10 @@ static void promote(glyph_t *g)
     if(!oldest) oldest = g;
 }
 
-static glyph_t *lookup(uint32_t cp, uint8_t px)
+static glyph_t *lookup(FT_Face f, uint32_t id, uint8_t px, int32_t flags)
 {
-    for(glyph_t *g = buckets[bucket_for(cp, px)]; g; g = g->hnext) {
-        if(g->codepoint == cp && g->px == px) {
+    for(glyph_t *g = buckets[bucket_for(f, id, px, flags)]; g; g = g->hnext) {
+        if(g->face == f && g->index == id && g->px == px && g->flags == flags) {
             promote(g);
             return g;
         }
@@ -75,25 +70,43 @@ static glyph_t *lookup(uint32_t cp, uint8_t px)
     return NULL;
 }
 
-static glyph_t *rasterize(uint32_t cp, uint8_t px)
+static void evict_oldest(void)
 {
-    if(FT_Set_Pixel_Sizes(face, 0, px)) return NULL;
-    FT_UInt index = FT_Get_Char_Index(face, cp);
-    if(!index || FT_Load_Glyph(face, index, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL | FT_LOAD_NO_AUTOHINT))
+    glyph_t *victim = oldest;
+    if(!victim) return;
+    unlink_glyph(victim);
+    glyph_t **link = &buckets[bucket_for(victim->face, victim->index, victim->px, victim->flags)];
+    while(*link != victim) link = &(*link)->hnext;
+    *link = victim->hnext;
+    used_bytes -= victim->bytes;
+    entries--;
+    free(victim);
+}
+
+static glyph_t *rasterize(FT_Face f, uint32_t index, uint8_t px, int32_t flags)
+{
+    if(FT_Set_Pixel_Sizes(f, 0, px)) return NULL;
+    raster_count++;
+    if(!index || FT_Load_Glyph(f, index, flags))
         return NULL;
-    FT_GlyphSlot slot = face->glyph;
+    FT_GlyphSlot slot = f->glyph;
     FT_Bitmap *bm = &slot->bitmap;
     if(((bm->width || bm->rows) && bm->pixel_mode != FT_PIXEL_MODE_GRAY) ||
        bm->width > 256 || bm->rows > 256 || bm->pitch < (int)bm->width ||
        (bm->rows && !bm->buffer)) return NULL;
-    size_t bytes = (size_t)bm->width * bm->rows;
+    size_t pixels = (size_t)bm->width * bm->rows;
+    size_t bytes = sizeof(glyph_t) + pixels;
     if(bytes > CACHE_LIMIT) return NULL;
     int32_t advance = slot->advance.x >> 6;
     if(advance < 0 || advance > UINT16_MAX) return NULL;
-    glyph_t *g = malloc(sizeof(*g) + bytes);
+    while(oldest && (used_bytes + bytes > CACHE_LIMIT || entries >= ENTRY_LIMIT)) {
+        evict_oldest();
+    }
+    glyph_t *g = malloc(bytes);
+    if(!g && oldest) { evict_oldest(); g = malloc(bytes); }
     if(!g) return NULL;
     memset(g, 0, sizeof(*g));
-    g->codepoint = cp;
+    g->face = f; g->index = index; g->flags = flags;
     g->px = px;
     g->width = bm->width;
     g->height = bm->rows;
@@ -103,17 +116,7 @@ static glyph_t *rasterize(uint32_t cp, uint8_t px)
     g->bytes = bytes;
     for(unsigned y = 0; y < bm->rows; y++)
         memcpy(g->bitmap + y * bm->width, bm->buffer + y * bm->pitch, bm->width);
-    while(oldest && (used_bytes + bytes > CACHE_LIMIT || entries >= ENTRY_LIMIT)) {
-        glyph_t *victim = oldest;
-        unlink_glyph(victim);
-        glyph_t **link = &buckets[bucket_for(victim->codepoint, victim->px)];
-        while(*link != victim) link = &(*link)->hnext;
-        *link = victim->hnext;
-        used_bytes -= victim->bytes;
-        entries--;
-        free(victim);
-    }
-    unsigned bucket = bucket_for(cp, px);
+    unsigned bucket = bucket_for(f, index, px, flags);
     g->hnext = buckets[bucket];
     buckets[bucket] = g;
     promote(g);
@@ -127,17 +130,23 @@ static bool get_dsc(const lv_font_t *font, lv_font_glyph_dsc_t *dsc, uint32_t cp
     (void)next;
     if(!enabled || !on_lv_thread()) return false;
     uint8_t px = (uint8_t)(uintptr_t)font->user_data;
-    glyph_t *g = lookup(cp, px);
-    if(!g) g = rasterize(cp, px);
+    unsigned slot = (cp * 2654435761u) & 4095u;
+    if(charmap[slot].cp != cp) {
+        charmap[slot].cp = cp;
+        charmap[slot].index = FT_Get_Char_Index(face, cp);
+    }
+    uint32_t index = charmap[slot].index;
+    if(!index) return false;
+    const glyph_t *g = fontft_raster(face, index, px, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL | FT_LOAD_NO_AUTOHINT);
     if(!g) return false;
     dsc->adv_w = g->advance;
     dsc->box_w = g->width;
     dsc->box_h = g->height;
     dsc->ofs_x = g->left;
     dsc->ofs_y = g->bottom;
-    dsc->format = g->bytes ? LV_FONT_GLYPH_FORMAT_A8 : LV_FONT_GLYPH_FORMAT_NONE;
+    dsc->format = g->width && g->height ? LV_FONT_GLYPH_FORMAT_A8 : LV_FONT_GLYPH_FORMAT_NONE;
     dsc->is_placeholder = 0;
-    dsc->gid.index = cp;
+    dsc->gid.index = index;
     dsc->entry = NULL;
     return true;
 }
@@ -146,8 +155,7 @@ static const void *get_bitmap(lv_font_glyph_dsc_t *dsc, lv_draw_buf_t *buf)
 {
     if(!enabled || !on_lv_thread() || !buf || !buf->data) return NULL;
     uint8_t px = (uint8_t)(uintptr_t)dsc->resolved_font->user_data;
-    glyph_t *g = lookup(dsc->gid.index, px);
-    if(!g) g = rasterize(dsc->gid.index, px);
+    const glyph_t *g = fontft_raster(face, dsc->gid.index, px, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL | FT_LOAD_NO_AUTOHINT);
     if(!g || g->width != dsc->box_w || g->height != dsc->box_h) return NULL;
     uint32_t stride = buf->header.stride;
     if(stride < g->width || (g->height && buf->data_size < (g->height - 1u) * stride + g->width))
@@ -169,13 +177,13 @@ void fontft_init(void)
 #endif
     int lang = i18n_lang();
     FT_Long face_index = lang == LANG_KO ? 3 : lang == LANG_JA ? 2 : lang == LANG_TW ? 1 : 0;
-    if(FT_Init_FreeType(&library) || FT_New_Face(library, path, face_index, &face) ||
+    if(!fontft_library() || FT_New_Face(library, path, face_index, &face) ||
        face->num_faces != 4 ||
        FT_Set_Pixel_Sizes(face, 0, 14) ||
        !FT_Get_Char_Index(face, 0xADF8) ||
        FT_Load_Char(face, 0xADF8, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL | FT_LOAD_NO_AUTOHINT)) {
         if(face) FT_Done_Face(face);
-        if(library) FT_Done_FreeType(library);
+        face = NULL;
         fprintf(stderr, "fontft: stock TTC unavailable; using built-in fonts\n");
         return;
     }
@@ -195,3 +203,28 @@ const lv_font_t *fontft_font(int px)
     }
     return font;
 }
+
+FT_Library fontft_library(void)
+{
+    if(!initialized) { initialized = 1; lv_thread = pthread_self(); }
+    if(!on_lv_thread()) return NULL;
+    if(!library && FT_Init_FreeType(&library)) return NULL;
+    return library;
+}
+int fontft_reclaim(void)
+{
+    if(!initialized || !on_lv_thread() || !oldest) return 0;
+    evict_oldest();
+    return 1;
+}
+const fontft_glyph *fontft_raster(FT_Face f, uint32_t index, int px, int32_t flags)
+{
+    if(!initialized || !on_lv_thread() || !f || px < 1 || px > 140) return NULL;
+    glyph_t *g = lookup(f, index, px, flags);
+    if(!g) g = rasterize(f, index, px, flags);
+    return g;
+}
+#ifdef DISKOS_HOST
+unsigned fontft_raster_count(void) { return raster_count; }
+size_t fontft_cache_bytes(void) { return used_bytes + sizeof buckets + sizeof charmap; }
+#endif

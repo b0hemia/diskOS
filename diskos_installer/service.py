@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Application service - the install / restore-stock / remove flows, independent
 of any front-end. CLI and GUI both call these with a Reporter and a `confirm`
 callback, so the two front-ends can never diverge in behaviour or safety checks.

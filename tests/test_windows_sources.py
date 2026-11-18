@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Offline checks for the release source pin and output containment."""
 from pathlib import Path
 import os

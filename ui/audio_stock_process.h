@@ -26,65 +26,11 @@
 #define AUDIO_STOCK_PRIVATE_DIR "/tmp"
 #endif
 #ifdef AUDIO_STOCK_EMBEDDED
-#ifndef MBEDTLS_CONFIG_FILE
-#error "the embedded stock helper is verified with mbedtls_sha256"
-#endif
-#include "mbedtls/sha256.h"
+#include "embedded_helper.h"
 /* Generated from the finished helper (tools/embed_audiodec.py): the image in its
  * own read-only section, and 52 descriptor bytes: magic[8], length[4], zero[4],
  * SHA-256[32], then the length the assembler actually included[4]. */
 extern const unsigned char diskos_audiodec_image[], diskos_audiodec_image_end[], diskos_audiodec_desc[];
-/* The helper must be an executable for the CPU this program runs on. */
-#if defined(__mips__) && defined(__MIPSEL__) && !defined(__mips64)
-#define STOCK_ELF_CLASS 1
-#define STOCK_ELF_MACHINE 8 /* EM_MIPS */
-#elif defined(__x86_64__)
-#define STOCK_ELF_CLASS 2
-#define STOCK_ELF_MACHINE 62 /* EM_X86_64, host tests */
-#elif defined(__aarch64__)
-#define STOCK_ELF_CLASS 2
-#define STOCK_ELF_MACHINE 183 /* EM_AARCH64, host tests */
-#else
-#define STOCK_ELF_CLASS 0
-#define STOCK_ELF_MACHINE 0 /* unknown target: nothing ever matches */
-#endif
-static inline unsigned stock_get16(const unsigned char *p){ return (unsigned)p[0] | (unsigned)p[1] << 8; }
-/* ELF identity: this target's class and machine, little-endian, current version, executable or PIE. */
-static inline int stock_helper_elf(const unsigned char *h, size_t n){
-    size_t header = STOCK_ELF_CLASS == 2 ? 64 : 52;
-    if(!STOCK_ELF_MACHINE || n < header || memcmp(h, "\177ELF", 4) || h[4] != STOCK_ELF_CLASS || h[5] != 1 || h[6] != 1) return 0;
-    unsigned type = stock_get16(h + 16);
-    return (type == 2 || type == 3) && stock_get16(h + 18) == STOCK_ELF_MACHINE;
-}
-static inline int stock_write_all(int fd, const unsigned char *p, size_t n){
-    while(n){
-        ssize_t w = write(fd, p, n);
-        if(w < 0 && errno == EINTR) continue;
-        if(w <= 0 || (size_t)w > n) return -1;
-        p += w; n -= (size_t)w;
-    }
-    return 0;
-}
-/* Length, ELF identity and SHA-256 of what will actually be executed: the copy
- * read back through its read-only descriptor after the writer was closed. */
-static inline int stock_helper_verify(int fd, size_t size, const unsigned char *digest){
-    struct stat st; unsigned char buf[4096], head[64], sum[32]; size_t got = 0, have = 0;
-    if(fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_nlink || (st.st_mode & 07777) != 0500 ||
-       st.st_size < 0 || (uint64_t)st.st_size != size) return -1;
-    mbedtls_sha256_context c; mbedtls_sha256_init(&c);
-    int bad = mbedtls_sha256_starts(&c, 0) != 0;
-    while(!bad){
-        ssize_t r = pread(fd, buf, sizeof buf, (off_t)got);
-        if(r < 0 && errno == EINTR) continue;
-        if(r < 0 || (size_t)r > size - got){ bad = 1; break; }
-        if(!r) break;
-        for(ssize_t i = 0; i < r && have < sizeof head; i++) head[have++] = buf[i];
-        bad = mbedtls_sha256_update(&c, buf, (size_t)r) != 0; got += (size_t)r;
-    }
-    if(!bad) bad = mbedtls_sha256_finish(&c, sum) != 0;
-    mbedtls_sha256_free(&c);
-    return bad || got != size || !stock_helper_elf(head, have) || memcmp(sum, digest, sizeof sum) ? -1 : 0;
-}
 /* Report an execution failure separately from the helper's backend refusal. */
 static inline void stock_process_unavailable(int fd){
     unsigned char h[AS_HEADER] = {0};
@@ -102,23 +48,9 @@ static inline void stock_process_unavailable(int fd){
  * created on AUDIO_STOCK_PRIVATE_DIR and unlinked at once, written with checked
  * writes, writer closed, then verified. -1 on any failure; nothing is left named. */
 static inline int stock_helper_prepare(void){
-    const unsigned char *image = diskos_audiodec_image, *desc = diskos_audiodec_desc;
-    size_t size = (size_t)(diskos_audiodec_image_end - diskos_audiodec_image);
-    if(memcmp(desc, AUDIO_STOCK_IMAGE_MAGIC, 8) || as_get32(desc + 8) != size || as_get32(desc + 12) ||
-       as_get32(desc + 48) != size || !size || size > AUDIO_STOCK_IMAGE_MAX || !stock_helper_elf(image, size)) return -1;
     char path[] = AUDIO_STOCK_PRIVATE_DIR "/.diskos-audiodec-XXXXXX";
-    int writer = mkostemp(path, O_CLOEXEC);
-    if(writer < 0) return -1;
-    int reader = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    int named = unlink(path); /* private from here on: nobody can open it by name */
-    struct stat a, b;
-    if(reader < 0 || named || fstat(writer, &a) || fstat(reader, &b) || a.st_dev != b.st_dev || a.st_ino != b.st_ino ||
-       fchmod(writer, 0500) || stock_write_all(writer, image, size)){
-        close(writer); if(reader >= 0) close(reader);
-        return -1;
-    }
-    if(close(writer) || stock_helper_verify(reader, size, desc + 16)){ close(reader); return -1; }
-    return reader;
+    return eh_prepare(diskos_audiodec_image, diskos_audiodec_image_end, diskos_audiodec_desc,
+                      AUDIO_STOCK_IMAGE_MAGIC, AUDIO_STOCK_IMAGE_MAX, path);
 }
 #endif
 /* The caller owns the returned child until waitpid confirms its reap. Negative
@@ -155,14 +87,7 @@ static inline pid_t stock_process_spawn(int input, int *output){
         sigset_t none; sigemptyset(&none); sigprocmask(SIG_SETMASK,&none,NULL);
         char *const args[]={(char *)"diskos-audiodec",NULL};
         char *const env[]={"PATH=/usr/bin:/bin",NULL};
-        /* A writer descriptor another thread's fork inherited for an instant
-         * makes exec refuse the copy (ETXTBSY) until that child execs. */
-        for(int tries=0;tries<50;tries++){
-            fexecve(5,args,env);
-            if(errno!=ETXTBSY) break;
-            const long delay[2]={0,2000000};
-            (void)syscall(SYS_nanosleep,delay,NULL);   /* MIPS o32 musl (time64) has no SYS_clock_nanosleep; kernel 4.4 lacks the time64 calls */
-        }
+        eh_exec(5,args,env);   /* retries ETXTBSY */
         stock_process_unavailable(3);
     }
     close(ctl); close(media); close(exe); close(sockets[1]);

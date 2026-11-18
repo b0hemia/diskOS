@@ -444,7 +444,7 @@ int shutdown_anim_start(int screen_lit){
     g.mode = M_RUN; g.phase = PW_DRAIN;
     g.t0 = g.ph_ms = g.last_ms = lv_tick_get();
     frame(g.t0);
-    g.tm = lv_timer_create(tm_cb, 1, NULL);
+    g.tm = lv_timer_create(tm_cb, LV_DEF_REFR_PERIOD, NULL);
     ui_toast_dismiss();   /* the animation says it: "Shutting down..." would show through the opening hole */
     return 1;
 }

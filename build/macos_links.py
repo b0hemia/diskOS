@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Validate Mach-O closure; optionally replace internal loads with @loader_path."""
 import argparse
 import os

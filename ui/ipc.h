@@ -3,6 +3,7 @@
 #ifndef IPC_H
 #define IPC_H
 #include <stdint.h>
+#include "track_path.h"
 
 /* Main-thread runtime #28 experiment. eligible means confirmed local BT intent;
  * preference must be an explicit 0/1. Absent/invalid debug file sends nothing
@@ -34,13 +35,15 @@ typedef struct {
     char album[160];
     char playing_num[24];
     char work_mode[24];
-    char path[256];
+    char path[TRACK_PATH_MAX];
     long duration_ms;
     long position_ms;
     int  state;       /* RAW A2 metadata when returned by ipc_get_state() - UNRELIABLE (reports 0 while
                        * playing); never test it for play-state. The main loop overwrites ITS LOCAL copy
                        * with the normalized 2=playing / 1=paused inference (and publishes g_playing). */
     int  have_track;
+    int  path_unavailable; /* the player reported a track whose path does not fit TRACK_PATH_MAX: no identity is
+                            * published (have_track 0, path empty) and the UI says so instead of keeping the old song */
     int  pos_id;      /* the current row of the player queue (LIST_SONG_0.ID, from a2 song.pos_id); 0 = unknown */
     int  sample_rate; /* Hz, from song_sample_rate */
     int  is_dsd;      /* DSD stream */
@@ -84,6 +87,17 @@ void ipc_get_state(track_state_t *out);
 /* Read-only complete A2 plus last accepted user toggle epoch and its A2 boundary.
  * Raw reply state 0=playing, 1=paused. Short replies carry have_track=0. */
 int ipc_resume_snapshot(track_state_t *out, unsigned *serial, unsigned *toggle, unsigned *after_report);
+/* Battery drain owns transport until end. Poll uses complete A2 newer than ownership and quiet after the last
+ * stamped frame, toggles at most once for confirmed playing, and returns 1 only with settled stop evidence (or a
+ * confirmed receiver mode). Holds re-proves that stop through the sync until 0806 (-1 failed, 0 settling, 1 holding);
+ * it never toggles. Fail marks a failed drain: transport stays owned, but a pause of audio the player reports playing,
+ * on a report newer than the failure, is admitted through ipc_send_cmd. See ipc.c "battery shutdown". */
+void ipc_battery_stop_begin(void);
+int ipc_battery_stop_poll(void);
+int ipc_battery_stop_holds(void);
+void ipc_battery_stop_fail(void);
+void ipc_battery_stop_end(void);
+void ipc_note_external_transport(void);   /* physical play/pause press seen by diskOS: restarts the QUIET clock */
 void ipc_seed_state(const track_state_t *s);  /* startup resume-state seed */
 #ifdef DISKOS_HOST
 /* Renderer input is an explicit player snapshot, including readiness and identity. */
@@ -94,6 +108,8 @@ int  ipc_send_probe(const char *frame);/* background send (state-sync/health): s
 #define IPC_SEND_DEFERRED 1 /* automatic intention remains pending, no send error */
 int  ipc_confirmed_snapshot(unsigned *generation); /* atomic current-generation evidence */
 int  ipc_send_automatic(const char *frame, unsigned generation); /* 0=queued, -1=failed, 1=deferred */
+/* Seek frame sent only while the current track is still the confirmed one with this token; 0=queued, 1=deferred/refused */
+int  ipc_seek_if_current(long ms, unsigned generation, uint64_t token);
 #ifdef DISKOS_TEST_BT_PREPARE
 int ipc_prepare_snapshot(track_state_t *, unsigned *serial, unsigned *playing_frames);
 /* Queue only while the preparation still owns this generation, track token
@@ -131,6 +147,9 @@ unsigned ipc_generation(void);         /* bumps on each /ui reattach (player res
  * *poweroff_seq bumps per frame), with their generation under one lock. Reattach clears both counters
  * and sets *on to -1 (no screen frame yet). Counters also start at 0 at startup. */
 void ipc_screen_snapshot(int *on, unsigned *scr_seq, unsigned *poweroff_seq, unsigned *generation);
+/* Count of aa03 frames with value 0000 (the player is powering off or rebooting within seconds; value 0002 is only a prompt) in
+ * this player generation, and that generation. Cleared on reattach like the counters above. Any thread. */
+unsigned ipc_poweroff_announced(unsigned *generation);
 /* The stock player's own charging report, aa1f (V2.57 mq_player adc_control.c, see ipc.c): exactly "aa1f000C0000" (not
  * charging) or "aa1f000C0001" (charging). The player sends it only when its debounced flag changes and a 0 when the battery
  * reaches 100%, never on request, so a UI restart starts without one. state: -1 = no valid report in this player

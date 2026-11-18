@@ -19,7 +19,7 @@ See [`ui/README.md`](../ui/README.md) for the toolchain details and a from-scrat
 
 ## 2. Get a shell on the device
 
-Enable **Debug Mode** on the device (Settings -> System). It shows the device IP and a one-time SSH
+Enable **Debug Mode** on the device (Settings > Device). It shows the device IP and a one-time SSH
 password. The password is regenerated on every enable and SSH access does **not** survive a reboot.
 
 ```sh
@@ -51,9 +51,11 @@ Two rules:
 
 ### Never kill `mq_player`
 
-`mq_player` is the stock audio engine. Killing it frees the SD card, and the hardware MCU reboots the
-whole device (about 10 seconds). Only ever touch `mq_ui`. If a restart caused a full reboot rather than
-just the stock UI appearing, an errant `mq_player` kill is the usual cause.
+`mq_player` is the stock audio engine. It starts and feeds the hardware watchdog; killing it
+stops that feed, and the watchdog reboots the whole device (about 10 seconds).
+`fiio_init.sh` supervises processes; it does not feed this hardware watchdog. Only ever
+touch `mq_ui`. If a restart caused a full reboot rather than just the stock UI appearing,
+an errant `mq_player` kill is the usual cause.
 
 ### Relaunch detached, from `/usr/data`, in one step
 
@@ -94,6 +96,9 @@ Hand-deployed binaries revert to the selected signed update or flashed build on 
 `--ui` overrides the bundled UI binary, so you can flash your own build. This is a mask-ROM write and
 takes about 20 minutes. The installer prompts for confirmation before it writes; add `-y` only when you
 deliberately want to skip that prompt (for example in a script), since it rewrites the root filesystem.
+
+On Linux, if the bundled squashfs tools fail their capability check, the installer checks a complete
+system pair from `PATH` the same way and uses it; bundled and system tools are never mixed.
 
 ### macOS note
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Shared output checks and independent complete archive export failures."""
 import os
 from pathlib import Path

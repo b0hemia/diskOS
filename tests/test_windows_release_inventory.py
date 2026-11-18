@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Offline Windows release gates; optional real artifact inventory."""
 import ast
 import hashlib

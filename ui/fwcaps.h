@@ -30,6 +30,7 @@ const char *fw_gain_tag(void);
 
 /* True where the Custom EQ editor may write + select its USER PEQ slots (see fwcaps.c); false = view-only. */
 int fw_custom_peq_writable(void);
+int fw_peq_band_edit(void);   /* V2.57 single-control commands + authoritative DB readback */
 
 /* True where the stock player turns Wi-Fi off at boot when both radios were saved on (V2.57 only). */
 int fw_has_radio_boot_arbitration(void);
@@ -49,5 +50,9 @@ int fw_track_display_settable(void);  /* 064d = track display (V2.40/V2.57) */
 
 /* Initial receiver target only; older/unknown firmware has no qualified contract. */
 int fw_airplay_receiver(void);
+/* Beam interlock (cast_handoff.h local_lock): 0657000C0002 keeps the stock play/pause key from starting the Disc while a song
+ * beams. Verified on a V2.57 Disc only. V2.40: static evidence says the same table maps wire mode 2 to NO_WORK_MODE, but it is
+ * NOT device-tested and diskOS does not read the key there, so it stays OFF until the V2.40 device check in HANDOFF passes. */
+int fw_beam_interlock(void);
 
 #endif /* FWCAPS_H */

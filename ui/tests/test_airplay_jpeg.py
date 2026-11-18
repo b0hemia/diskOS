@@ -50,6 +50,9 @@ static void *art_malloc(size_t n) {
 void lv_memset(void *d, uint8_t v, size_t n) { if(n) memset(d, v, n); }
 int sd_io_begin(void) { return 1; }
 void sd_io_end(void) {}
+int sd_io_allowed(void) { return 1; }
+uint64_t sd_io_generation(void) { return 0; }
+unsigned artcache_gen(void) { return 0; }
 int artcache_cover_candidate(const char *p, char *o, int n) {
     (void)p; (void)o; (void)n; return -1;
 }

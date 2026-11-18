@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """S96diskos_select: the one boot decision, and the promise that it resolves to stock on every failure.
 
 Runs the REAL shipped script under the host /bin/sh AND under the V2.40 firmware's BusyBox ash via

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Offline freeze validation and release archive contracts."""
 import hashlib
 import importlib.util

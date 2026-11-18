@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Theme tables and the Welcome mode mapping of the GUI (display tests skip without Tk/display)."""
 import os
 import sys

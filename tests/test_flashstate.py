@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Host checks of the shipped identity helper source; no device access."""
 import os
 from pathlib import Path

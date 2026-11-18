@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+#include "ui_wake.h"
 #include "custom_saver_apply.h"
 #include "custom_saver_db.h"
 #include "ipc.h"
@@ -423,6 +424,7 @@ custom_gif_status custom_still_start(const char *src) {
         pthread_mutex_lock(&gs_mu); gs.st = st ? GS_IDLE : GS_WAIT; pthread_mutex_unlock(&gs_mu);
     }
     pthread_mutex_unlock(&ga_mu);
+    ui_notify(UI_WAKE_STILL);
     return st;
 }
 /* a810 success is not trusted until the PNG exists, is a regular file within bounds and decodes. */
@@ -481,6 +483,7 @@ static void *gs_worker(void *unused) {
     pthread_mutex_lock(&gs_mu);
     gs.res = st; gs.drop = !st; gs.stuck = retain; gs.st = GS_DONE;
     pthread_mutex_unlock(&gs_mu);
+    ui_notify(UI_WAKE_STILL);
     return NULL;
 }
 /* UI thread: join a finished worker, then drop the cached image so the next draw reads the new file. */
@@ -535,4 +538,8 @@ custom_gif_status custom_gif_apply(const char *src, custom_gif_decode_fn decode)
     }
     pthread_mutex_unlock(&ga_mu);
     return st;
+}
+
+int custom_still_waiting(void){
+    pthread_mutex_lock(&gs_mu);int waiting=gs.st==GS_WAIT;pthread_mutex_unlock(&gs_mu);return waiting;
 }

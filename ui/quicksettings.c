@@ -171,7 +171,7 @@ static void tile_short_cb(lv_event_t *e){
     if(tile_local_blocked(id)) return;
     switch(id){
         case QT_WIFI:      { int on = wifi_toggle(); tile_recolor(QT_WIFI, on); ui_toast(on ? "Turning on Wi-Fi..." : "Wi-Fi off"); } break;
-        case QT_BT:        { int on = bt_toggle();   tile_recolor(QT_BT,   on); ui_toast(on ? "Turning on Bluetooth..." : "Bluetooth off"); } break;
+        case QT_BT:        { int on = bt_toggle(); if(on < 0) break; tile_recolor(QT_BT, on); ui_toast(on ? "Turning on Bluetooth..." : "Bluetooth off"); } break;
         case QT_EQ:        eq_toggle(); break;
         case QT_SEARCH:    screen_show(SCR_SEARCH); break;
         case QT_RESCAN:    ui_rescan_library(); break;
@@ -212,12 +212,12 @@ static void tile_short_cb(lv_event_t *e){
         case QT_OUTDOOR: {                                          /* redraws the UI in the new palette */
             int was = cfg_get_int("outdoor", 0) == 1;
             cfg_set_int("outdoor", !was);
-            if(ui_theme_reload("quick") != 0) cfg_set_int("outdoor", was);   /* refused (scan): nothing changes */
+            if(ui_theme_reload_setting("quick","outdoor",was) != 0) cfg_set_int("outdoor", was);   /* refused (scan): nothing changes */
         } break;
         case QT_THEME: {                                            /* next colour preset */
             int was = theme_preset();
             cfg_set_int("theme_preset", (was + 1) % THEME_PRESET_COUNT);
-            if(ui_theme_reload("quick") != 0) cfg_set_int("theme_preset", was);
+            if(ui_theme_reload_setting("quick","theme_preset",was) != 0) cfg_set_int("theme_preset", was);
         } break;
     }
 }

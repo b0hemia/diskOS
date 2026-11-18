@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Local fallbacks when the download cannot be used: Downloads scan and browser page.
 
 Nothing here touches the network, and nothing runs on import. The scanner never

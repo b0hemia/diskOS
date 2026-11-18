@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Acquisition supervision against fake helper processes. No network, no device."""
 import contextlib
 import io

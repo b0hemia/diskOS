@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Archive a stable, qualified tree with a complete SHA256SUMS file."""
 import argparse
 import hashlib

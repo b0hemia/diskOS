@@ -9,6 +9,8 @@
 #include "musicdb.h"
 #include "config.h"
 #include "lrc.h"
+#define JSMN_HEADER
+#include "jsmn.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,13 +59,13 @@ static int g_local_done, g_local_found;
 static int g_title_pending;
 static uint64_t g_token;
 static unsigned g_generation;
-static char g_path[256];                       /* current track path (main thread only) */
+static char g_path[TRACK_PATH_MAX];                     /* current track path (main thread only) */
 
 /* Per-fetch inputs snapshotted on the MAIN thread before pthread_create and handed to
  * the worker as its arg, so the worker never reads the g_req / g_q_title / g_q_artist /
  * g_path globals directly (they are main-thread-only; a re-open could otherwise race
  * the worker's reads of them). */
-typedef struct { unsigned req; int online, online_only; char title[512], artist[512], path[256]; } ly_job_t;  /* enc query, see g_q_* */
+typedef struct { unsigned req; int online, online_only; char title[512], artist[512], path[TRACK_PATH_MAX]; } ly_job_t;  /* enc query, see g_q_* */
 
 
 static void urlenc(const char *s, char *out, int cap)
@@ -138,19 +140,35 @@ static int json_first_object(const char *resp, const char **b, const char **e)
     return 0;
 }
 
-/* pull the `key` JSON string ("key":"...") of the FIRST search result out of resp into out (unescaped); only a key
- * of that object counts, whatever order its fields come in */
+/* Tokenize the first record only; later search hits cannot supply its fields. */
 static int json_lyrics(const char *resp, const char *key, char *out, int cap)
 {
-    char pat[40]; snprintf(pat, sizeof pat, "\"%s\":\"", key);
+    if(cap < 1) return 0;
     out[0] = 0;
     const char *ob, *oe;
     if(!json_first_object(resp, &ob, &oe)) return 0;
-    const char *p = strstr(ob, pat);
-    if(!p || p + strlen(pat) > oe) return 0;
-    p += strlen(pat);
+    jsmn_parser parser; jsmntok_t tokens[128];
+    jsmn_init(&parser);
+    int nt = jsmn_parse(&parser, ob, (size_t)(oe - ob), tokens, 128);
+    if(nt < 1 || tokens[0].type != JSMN_OBJECT) return 0;
+    int value = -1;
+    for(int i = 1; i + 1 < nt; ){
+        jsmntok_t *k = &tokens[i], *v = &tokens[i+1];
+        if(k->type != JSMN_STRING) return 0;
+        if((size_t)(k->end - k->start) == strlen(key) &&
+           !strncmp(ob + k->start, key, strlen(key))){
+            if(v->type == JSMN_STRING) value = i + 1;
+            break;
+        }
+        int end = v->end;
+        i += 2;
+        while(i < nt && tokens[i].start < end) i++;
+    }
+    if(value < 0) return 0;
+    const char *p = ob + tokens[value].start;
+    const char *end = ob + tokens[value].end;
     int len = 0;
-    while(*p && len < cap - 2){
+    while(p < end && len < cap - 2){
         if(*p == '\\'){
             p++; char e = *p;
             if(e=='n') out[len++]='\n';
@@ -202,7 +220,7 @@ static void *lyrics_thread(void *arg)
 
     /* 1) local sibling .lrc FIRST - instant for offline users who sideloaded lyrics (no 12s wait) */
     if(!job->online_only && job->path[0] && sd_io_begin()){
-        char lrc[320]; derive_lrc(job->path, lrc, sizeof lrc);
+        char lrc[TRACK_PATH_MAX + 8]; derive_lrc(job->path, lrc, sizeof lrc);
         FILE *f = fopen(lrc, "r");
         if(f){ read_lrc(f, g_lbuf, sizeof g_lbuf); fclose(f); }
         sd_io_end();
@@ -511,7 +529,7 @@ void lyrics_poll(lv_timer_t *t)
          * and no worker is running, so reading it here is race-free. */
         if(g_lkind == 2){ if(show_timed(g_lbuf) && on) lyrics_follow(); }
         else show_text(g_lbuf, g_lkind == 0);
-    } else if(g_q_title[0] || (g_title_pending && g_path[0])){
+    } else if(on && (g_q_title[0] || (g_title_pending && g_path[0]))){
         /* finished fetch was for a superseded track - fetch the current one
          * (start_fetch no-ops if a newer fetch is already running). */
         (void)inflight;

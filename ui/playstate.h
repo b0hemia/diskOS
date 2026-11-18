@@ -26,4 +26,16 @@ void playstate_reset(playstate_t *ps);
 int playstate_playing(playstate_t *ps, int have_track, long position_ms,
                       unsigned now_tick, unsigned grace_ms, unsigned max_adv_ms);
 
+typedef struct {
+    unsigned active, landed, sent_tick, landing_tick, pos_seq;
+} playstate_seek_t;
+
+/* Notify only after a successful local seek; never turn a paused seek into play. */
+void playstate_seek_sent(playstate_seek_t *s, unsigned now, unsigned pos_seq,
+                         int was_playing);
+/* pos_seq changes only on a fresh position report, not on metadata updates. */
+int playstate_seek_playing(playstate_t *ps, playstate_seek_t *s,
+                           int have_track, long position_ms, unsigned pos_seq,
+                           unsigned now, unsigned grace_ms, unsigned max_adv_ms);
+
 #endif

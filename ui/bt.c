@@ -4,7 +4,10 @@
 #include "device_names_ui.h"
 #include "i18n.h"
 #include "procrun.h"
+#include "ui_wake.h"
+#include "radio_monitor.h"
 #include "screens.h"
+extern int ui_screen_backlight_on(void);
 #include "theme.h"
 #include "theme_kit.h"
 #include "config.h"       /* cfg_get_int/cfg_set_int: persist the BT on/off intent */
@@ -20,6 +23,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <sys/wait.h>
 #include <poll.h>
@@ -46,6 +50,7 @@ static lv_timer_t *g_scan_timer;
 static lv_timer_t *g_scanwait_timer;   /* bt_open's non-destructive "wait for adapter then scan" poll */
 static uint32_t    g_scanwait_start;
 static lv_timer_t *g_bt_autoroute_timer;
+static int g_autoroute_wait;
 static char g_sel_mac[20];     /* device selected for the details screen */
 static char g_bt_autorouted[20];
 /* ---- routing ownership ---- */
@@ -115,13 +120,29 @@ static int run_cap_bounded(const char *cmd, char *out, int cap, int timeout_ms){
     }
     return PROC_FAILED;
 }
+static void scan_spin_start(void){
+    if(!g_scan_icon)return;
+    lv_anim_delete(g_scan_icon,spin_anim_cb);
+    lv_anim_t a; lv_anim_init(&a); lv_anim_set_var(&a, g_scan_icon);
+    lv_anim_set_exec_cb(&a, spin_anim_cb);
+    lv_anim_set_values(&a, 0, 3600); lv_anim_set_time(&a, 900);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&a);
+}
+static void scan_spinner_sync(int visible){
+    static int was_visible=1;
+    if(visible==was_visible)return;
+    was_visible=visible;
+    if(!g_scan_icon)return;
+    if(visible)scan_spin_start();else lv_anim_delete(g_scan_icon,spin_anim_cb);
+}
 /* Legacy workflows and scan/codec workers: bounded wait; their state migration is separate. */
 static int bt_capture_wait(const char *cmd, char *out, int cap, int timeout_ms){
     unsigned h = proc_start(cmd, timeout_ms, cap);
     out[0] = 0;
     if(!h) return 0;
     int r;
-    while(!(r = proc_poll(h, out, cap))) usleep(1000);
+    r = proc_wait(h, out, cap);
     if(r != PROC_COMPLETE) out[0] = 0;
     return (int)strlen(out);
 }
@@ -165,21 +186,20 @@ static void list_msg_scanning(void){
     g_scan_icon = ic;
     lv_obj_set_style_transform_pivot_x(ic, lv_pct(50), 0);
     lv_obj_set_style_transform_pivot_y(ic, lv_pct(50), 0);
-    lv_anim_t a; lv_anim_init(&a); lv_anim_set_var(&a, ic);
-    lv_anim_set_exec_cb(&a, spin_anim_cb);
-    lv_anim_set_values(&a, 0, 3600); lv_anim_set_time(&a, 900);
-    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-    lv_anim_start(&a);
+    if(ui_screen_backlight_on() && screen_current()==SCR_BT)scan_spin_start();
 }
 
 /* powered = bluetoothd up AND adapter Powered: yes */
+static int g_bt_probe_pending;
 static int bt_on(void){
-    static int last;
-    /* bluetoothctl talks to bluetoothd over D-Bus and can stall if the daemon is wedged - bound it so
-     * this probe (called from UI poll timers) never freezes the main thread. */
-    char s[2048]; bt_capture_wait("bluetoothctl show 2>/dev/null", s, sizeof s, 250);
-    if(s[0]) last = strstr(s, "Powered: yes") != NULL;
-    return last; /* pending/failed probe does not establish power loss */
+    static int last;static unsigned seen=~0u;static uint32_t retry;
+    unsigned revision=radio_monitor_revision();
+    if(!g_bt_probe_pending && seen==revision && (radio_monitor_ready() || (int32_t)(lv_tick_get()-retry)<0))return last;
+    seen=revision;
+    char s[2048];int result=run_cap_bounded("bluetoothctl show 2>/dev/null",s,sizeof s,250);
+    g_bt_probe_pending=result==0;
+    if(result){retry=lv_tick_get()+1000;if(s[0])last=strstr(s,"Powered: yes")!=NULL;}
+    return last;
 }
 
 /* Cheap "is the BT radio enabled?" for the status icon + QS tile: reads the bluetooth rfkill soft-block
@@ -187,7 +207,8 @@ static int bt_on(void){
  * blocks, and the stock boot can bring BT up per its own SYSCONFIG - unlike the persisted cfg intent,
  * which goes stale when the stock firmware enables BT out from under us. Falls back to the intent if no
  * bluetooth rfkill node exists. */
-int bt_radio_on(void){
+static atomic_int g_bt_radio_observed;
+static int bt_radio_native(void){
     int found = 0;
     for(int i = 0; i < 12; i++){
         char p[64]; snprintf(p, sizeof p, "/sys/class/rfkill/rfkill%d/type", i);
@@ -200,8 +221,11 @@ int bt_radio_on(void){
         int soft = 1; if(fscanf(f, "%d", &soft) != 1) soft = 1; fclose(f);
         if(soft != 0) return 0;   /* any bluetooth rfkill soft-blocked -> BT off */
     }
-    return found ? 1 : cfg_get_int("bt_on", 0);
+    return found ? 1 : -1;
 }
+int bt_radio_on(void){int on=bt_radio_native();if(on<0)on=cfg_get_int("bt_on",0);atomic_store(&g_bt_radio_observed,on);return on;}
+int bt_radio_cached(void){return atomic_load(&g_bt_radio_observed);}
+int bt_radio_probe(void){int on=bt_radio_native();return on<0 ? bt_radio_cached() : on;}
 /* What the page's switch and the Settings row's switch show: the saved intent OR the live radio (see bt_open). */
 int bt_control_on(void){ return cfg_get_int("bt_on", 0) || bt_radio_on(); }
 
@@ -490,14 +514,14 @@ static int bt_mac_valid(const char *mac){
 
 static int bt_info_prop(const char *buf, const char *key, char *out, int cap);
 /* A missing PCM is not a missing radio link (codec rebuilds remove PCMs).
- * Return 1 for confirmed down, 0 for connected, -1 for unknown. */
+ * Return 1 for confirmed down, 0 for connected, -1 for unknown, -2 for pending. */
 static int bt_link_disconnected(const char *mac, int timeout_ms){
     if(timeout_ms <= 0 || !bt_mac_valid(mac)) return -1;
     char cmd[160], info[4097], value[16], device[32];
     const char *marker = "\nDISKOS_INFO_DONE\n";
     snprintf(cmd, sizeof cmd, "bluetoothctl info %s 2>/dev/null && printf '\\nDISKOS_INFO_DONE\\n'", mac);
     bt_capture_drop_except(cmd);
-    run_cap_bounded(cmd, info, sizeof info, timeout_ms);
+    if(run_cap_bounded(cmd, info, sizeof info, timeout_ms) == 0) return -2;
     char *done = strstr(info, marker);
     if(!done || done[strlen(marker)]) return -1;
     *done = 0;
@@ -513,7 +537,8 @@ static int bt_link_disconnected(const char *mac, int timeout_ms){
 /* Route once per connected bluealsa A2DP sink. Keeping the MAC latched while the
  * PCM exists preserves a manual switch back to analog until the sink reconnects. */
 static void bt_autoroute_poll_cb(lv_timer_t *t){
-    (void)t;
+    if(t)lv_timer_pause(t);
+    g_autoroute_wait=0;
     /* Receiver audio stays on the current route: no PCM probe, no route, and nothing latched, so the first poll
      * after Return to Local routes a connected speaker as usual (route_bt in main.c refuses it too). */
     if(ui_receiver_active()){ bt_capture_drop_except(NULL); return; }
@@ -523,6 +548,7 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
     static char missing[20];
     static unsigned misses, absent_polls;
     static int recovery_started;
+    static uint32_t loss_sample_due;static int loss_sample_armed;
     char path[2048] = {0}, mac[20] = "";
     int found = 0, routed_found = 0;
     const char *routed = ui_route_mac();
@@ -532,11 +558,12 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
     int result = run_cap_bounded(
         "bluealsa-cli list-pcms 2>/dev/null && printf '\nDISKOS_LIST_DONE\n'",
         path, sizeof path, 250);
-    if(!result) return; /* Pending is not a completed unknown observation. */
+    if(!result){g_autoroute_wait=1;return;} /* Pending is not a completed unknown observation. */
     char *done = strstr(path, "\nDISKOS_LIST_DONE\n");
     if(!done || done[strlen("\nDISKOS_LIST_DONE\n")]){
         if(misses < 2) misses = 0;
         absent_polls = 0;
+        if(t)lv_timer_resume(t);
         return;
     }
     *done = 0;
@@ -559,22 +586,28 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
         line = nl ? nl + 1 : NULL;
     }
     int loss_accepted = ui_route_bt_loss_accepted();
-    if(!routed[0] || routed_found || loss_accepted) bt_capture_drop_except(NULL);
+    if(routed_found || loss_accepted ||
+       (!routed[0] && (found || !g_bt_autorouted[0])))
+        bt_capture_drop_except(NULL);
     if(routed[0] && (!routed_found || loss_accepted)){
+        if(t)lv_timer_resume(t);
         if(strcmp(missing, routed)){
             snprintf(missing, sizeof missing, "%s", routed);
-            misses = absent_polls = 0; recovery_started = 0;
+            misses = absent_polls = 0; recovery_started = 0;loss_sample_armed=0;
         }
+        if(loss_sample_armed && (int32_t)(lv_tick_get()-loss_sample_due)<0)return;
+        loss_sample_armed=1;loss_sample_due=lv_tick_get()+3000;
         if(!loss_accepted){
             /* Share a 350 ms probe budget, reserving 100 ms for cleanup. */
             int left = 250 - (int)lv_tick_elaps(probe_start);
             int disconnected = bt_link_disconnected(routed, left);
             if(disconnected == 0){ misses = absent_polls = 0; recovery_started = 0; return; }
             if(absent_polls < 10) absent_polls++;
+            if(disconnected == -2 && absent_polls < 10){g_autoroute_wait=1;return;}
             if(disconnected < 0){
                 misses = 0;
-                /* Ten consecutive successful lists missing this PCM: 30 seconds at
-                 * the 3-second cadence. Brief rebuild gaps do not qualify;
+                /* Ten consecutive successful lists missing this PCM. Pending
+                 * list queries do not count. Brief rebuild gaps do not qualify;
                  * connected evidence or a returning PCM resets the grace. */
                 if(absent_polls < 10) return;
                 misses = 2;
@@ -593,9 +626,16 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
         }
         return;
     }
-    misses = absent_polls = 0; missing[0] = 0; recovery_started = 0;
+    misses = absent_polls = 0; missing[0] = 0; recovery_started = 0; loss_sample_armed=0;
     if(routed_found && bt_route_allowed(routed)) snprintf(mac, sizeof mac, "%s", routed);
     if(!found){
+        /* PCM rebuilds do not end a manual Analog choice. Clear the latch only
+         * after a full BlueZ snapshot establishes a disconnected link. */
+        if(g_bt_autorouted[0]){
+            int disconnected=bt_link_disconnected(g_bt_autorouted,250);
+            if(disconnected==-2){g_autoroute_wait=1;return;}
+            if(disconnected!=1){if(disconnected<0 && t)lv_timer_resume(t);return;}
+        }
         g_bt_autorouted[0] = 0;
 #ifdef DISKOS_TEST_BT_PREPARE
         ui_bt_route_prepare_cancel();
@@ -605,6 +645,7 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
     if(mac[0] && strcmp(mac, g_bt_autorouted)){
         if(ui_route_bt_automatic(mac) == 0)     /* latch only on a successful route, else retry on the next poll */
             snprintf(g_bt_autorouted, sizeof g_bt_autorouted, "%s", mac);
+        else if(t)lv_timer_resume(t);
     }
 }
 
@@ -625,7 +666,8 @@ void bt_notify_player_restart(void){
     ui_bt_route_prepare_cancel();
 #endif
     g_bt_autorouted[0] = 0;
-    if(bt_on() && !g_bt_autoroute_timer) bt_autoroute_start();
+    if(g_bt_autoroute_timer){lv_timer_resume(g_bt_autoroute_timer);lv_timer_ready(g_bt_autoroute_timer);}
+    else if(bt_on())bt_autoroute_start();
 }
 
 /* ---- pair + connect ----------------------------------------------------- */
@@ -823,8 +865,16 @@ static int bt_ops_busy(void){
     return g_at.stage != AT_IDLE || g_inf.on;
 }
 static void bt_ops_cb(lv_timer_t *t){
-    bt_attempt_step(); bt_jobs_step(); bt_info_step();
-    if(!bt_ops_busy()){ lv_timer_del(t); g_ops_timer = NULL; }
+    for(int i=0;i<3;i++){
+        int before=g_at.stage;bt_attempt_step();
+        if(g_at.stage==before || g_at.h || g_at.stage==AT_IDLE)break;
+    }
+    bt_jobs_step();bt_info_step();
+    if(!bt_ops_busy()){if(t)lv_timer_del(t);g_ops_timer=NULL;}
+    else if(t){
+        if((g_at.stage!=AT_IDLE && !g_at.h) || (g_inf.on && !g_inf.h))lv_timer_resume(t);
+        else lv_timer_pause(t);
+    }
 }
 static void bt_ops_ensure(void){ if(!g_ops_timer) g_ops_timer = lv_timer_create(bt_ops_cb, 200, NULL); }
 /* ---- end operations ---- */
@@ -845,7 +895,7 @@ static void bt_disconnect(const char *mac){
     if(!strcmp(mac, g_bt_autorouted)) g_bt_autorouted[0] = 0;
     bt_route_revoke(mac);
     if(g_at.stage != AT_IDLE && !strcmp(g_at.mac, mac)) bt_attempt_cancel(0);
-    ui_route_analog();          /* return audio to the DAC before dropping the A2DP link */
+    if(!strcmp(mac, ui_route_mac())) ui_route_analog();
     ui_toast(bt_disconnect_job(mac) ? "Disconnecting..." : tr("Connection failed"));
 }
 /* Forget = remove (BlueZ drops the link first). The result toast arrives when the job finishes. */
@@ -854,7 +904,7 @@ static void bt_forget(const char *mac){
     if(!strcmp(mac, g_bt_autorouted)) g_bt_autorouted[0] = 0;
     bt_route_revoke(mac);
     if(g_at.stage != AT_IDLE && !strcmp(g_at.mac, mac)) bt_attempt_cancel(0);
-    ui_route_analog();          /* route audio back to analog BEFORE removing the sink */
+    if(!strcmp(mac, ui_route_mac())) ui_route_analog();
     char cmd[128];
     snprintf(cmd, sizeof cmd, "bluetoothctl remove %s >/dev/null 2>&1", mac);
     unsigned h = proc_start(cmd, BT_JOB_MS, 16);
@@ -1144,6 +1194,7 @@ static void *scan_worker(void *arg){
         g_scan_running = 0;
     }
     pthread_mutex_unlock(&g_scan_mu);
+    ui_notify(UI_WAKE_BT);
     return NULL;
 }
 
@@ -1177,7 +1228,7 @@ static void scanpoll_cb(lv_timer_t *t){
     int done;
     pthread_mutex_lock(&g_scan_mu); done = g_scan_done; pthread_mutex_unlock(&g_scan_mu);
     if(!done){
-        if(++g_scanpoll_n < 100) return;   /* keep waiting (~30s) for the worker */
+        /* The one timeout is the original 30-s abandonment deadline. */
         pthread_mutex_lock(&g_scan_mu); g_scan_gen++; g_scan_running = 0; pthread_mutex_unlock(&g_scan_mu);
     }
     if(g_scanpoll_timer){ lv_timer_del(g_scanpoll_timer); g_scanpoll_timer = NULL; }
@@ -1189,7 +1240,7 @@ static void scanpoll_cb(lv_timer_t *t){
 static void scan_ensure_poll(void){
     g_scanpoll_n = 0;
     if(g_scanpoll_timer) lv_timer_del(g_scanpoll_timer);
-    g_scanpoll_timer = lv_timer_create(scanpoll_cb, 300, NULL);
+    g_scanpoll_timer = lv_timer_create(scanpoll_cb, 30000, NULL);
 }
 
 /* main thread: spawn the off-thread enumeration. If one is already running, just make
@@ -1274,9 +1325,16 @@ static void radio_on_poll_cb(lv_timer_t *t){
 /* The one Bluetooth power path: the page's switch and the Settings > Network row both call it. An explicit enable
  * replaces the boot-restore observer with its own radio poll (bt_enable); Off cancels both (bt_disable). */
 int bt_power_pending(void){ return g_radio_timer != NULL; }   /* a start made here is still waiting for the adapter */
+static int bt_power_off_ready(void){
+    if(!ui_route_mac()[0] || ui_route_analog() == 0) return 1;
+    if(g_sw) lv_obj_add_state(g_sw, LV_STATE_CHECKED);
+    ui_toast(tr("Couldn't switch output - try again"));
+    return 0;
+}
 void bt_power_set(int on){
+    if(!on && !bt_power_off_ready()) return;
     if(on){
-        cfg_set_int("bt_on", 1);   /* persist intent so boot restores it (mirror WiFi) */
+        cfg_set_int("bt_on", 1);atomic_store(&g_bt_radio_observed,1);   /* persist intent so boot restores it (mirror WiFi) */
         bt_enable();
         list_msg("Turning on " LV_SYMBOL_BLUETOOTH);
         g_radio_start = lv_tick_get();
@@ -1284,11 +1342,10 @@ void bt_power_set(int on){
         if(g_radio_timer) lv_timer_del(g_radio_timer);
         g_radio_timer = lv_timer_create(radio_on_poll_cb, 1000, NULL);
     } else {
-        cfg_set_int("bt_on", 0);   /* OFF before teardown so boot-restore won't resurrect it */
+        cfg_set_int("bt_on", 0);atomic_store(&g_bt_radio_observed,0);   /* OFF before teardown so boot-restore won't resurrect it */
         if(g_radio_timer){ lv_timer_del(g_radio_timer); g_radio_timer = NULL; }
         bt_attempt_cancel(0);  /* a pending attempt must not scan_kick() or route while BT is off */
         scan_abort();          /* cancel any pending/active scan so it can't render over "off" */
-        ui_route_analog();     /* return audio to the DAC before killing the BT stack */
         bt_disable();
         list_msg("Bluetooth is off");
     }
@@ -1301,10 +1358,11 @@ static void sw_cb(lv_event_t *e){
 }
 
 /* Quick Settings tile short-press: flip BT + persist intent, no screen-specific UI.
- * Mirrors sw_cb's actions (bt_boot_restore/keepalive enforce the intent). Returns new state. */
+ * Mirrors sw_cb's actions (bt_boot_restore/keepalive enforce the intent). Returns new state, -1 if refused. */
 int bt_toggle(void){
     int on = !bt_radio_on();   /* flip the ACTUAL radio state, not the (possibly stale) persisted intent */
-    cfg_set_int("bt_on", on);
+    if(!on && !bt_power_off_ready()) return -1;
+    cfg_set_int("bt_on", on);atomic_store(&g_bt_radio_observed,!!on);
     if(on){
         bt_enable();
         g_radio_start = lv_tick_get();
@@ -1315,7 +1373,6 @@ int bt_toggle(void){
         if(g_radio_timer){ lv_timer_del(g_radio_timer); g_radio_timer = NULL; }        /* cancel the bring-up poll too */
         bt_attempt_cancel(0);  /* a pending attempt must not scan_kick() or route while BT is off */
         scan_abort();          /* cancel any pending/active scan */
-        ui_route_analog();     /* return audio to the DAC before killing the BT stack */
         bt_disable();
     }
     /* keep the BT screen's switch in sync so it reflects reality when opened later */
@@ -1339,6 +1396,7 @@ void bt_init_intent(void){
 }
 static lv_timer_t *g_bootrestore_timer;
 static uint32_t    g_bootrestore_start;
+static int         g_bootrestore_observe;
 static void bootrestore_cancel(void){
     if(g_bootrestore_timer){ lv_timer_del(g_bootrestore_timer); g_bootrestore_timer = NULL; }
 }
@@ -1351,6 +1409,13 @@ static void bootrestore_poll_cb(lv_timer_t *t){
         bt_autoroute_start();          /* speaker auto-reconnects -> auto-route routes it */
         return;
     }
+    if(g_bootrestore_observe && !g_bt_probe_pending){
+        g_bootrestore_observe=0;
+        bt_enable(); /* cancels this observer before starting bring-up */
+        g_bootrestore_start=lv_tick_get();
+        g_bootrestore_timer=lv_timer_create(bootrestore_poll_cb,1000,NULL);
+        return;
+    }
     if(lv_tick_elaps(g_bootrestore_start) > 28000){       /* patchram + power-on settle */
         bootrestore_cancel();
     }
@@ -1360,7 +1425,8 @@ void bt_boot_restore(void){
     bt_init_intent();
     if(cfg_get_int("bt_on", 0) != 1) return;              /* was off -> stay off */
     if(bt_on()){ bt_ensure_services(); bt_autoroute_start(); return; }   /* already up (UI restart) */
-    bt_enable();
+    g_bootrestore_observe=g_bt_probe_pending;
+    if(!g_bootrestore_observe)bt_enable();
     g_bootrestore_start = lv_tick_get();
     if(g_bootrestore_timer) lv_timer_del(g_bootrestore_timer);
     g_bootrestore_timer = lv_timer_create(bootrestore_poll_cb, 1000, NULL);
@@ -1481,4 +1547,32 @@ void bt_open(void){
     } else {
         list_msg("Bluetooth is off");
     }
+}
+
+static int bt_monitor_wanted(void){
+    return cfg_get_int("bt_on",0) || bt_radio_cached() || g_radio_timer ||
+        g_bootrestore_timer || g_scanwait_timer || g_bt_autoroute_timer;
+}
+/* Main-thread delivery. Raw monitor text never drives routing directly. */
+void bt_event_deliver(unsigned topics){
+    scan_spinner_sync(ui_screen_backlight_on() && screen_current()==SCR_BT);
+    static unsigned seen,player;static int receiver=-1;
+    if(radio_monitor_quiescing())return;
+    int watch=bt_monitor_wanted();radio_monitor_set_active(watch);
+    if(watch && radio_monitor_start()<0 && g_bt_autoroute_timer)
+        lv_timer_resume(g_bt_autoroute_timer); /* no worker: retain the original observation deadline */
+    unsigned revision=radio_monitor_revision(),generation=ipc_generation();
+    int rx=ui_receiver_active();
+    int changed=revision!=seen || generation!=player || rx!=receiver;
+    seen=revision;player=generation;receiver=rx;
+    if(changed){bt_capture_drop_except(NULL);g_autoroute_wait=0;}
+    if(g_ops_timer && (changed || (topics&UI_WAKE_BT)))bt_ops_cb(g_ops_timer);
+    int done;pthread_mutex_lock(&g_scan_mu);done=g_scan_done;pthread_mutex_unlock(&g_scan_mu);
+    if(done && g_scanpoll_timer && ui_screen_backlight_on())scanpoll_cb(g_scanpoll_timer);
+    if(watch && (changed || (topics&UI_WAKE_BT)))(void)bt_on();
+    if(changed){
+        dnui_radio();
+        if(g_scanwait_timer)lv_timer_ready(g_scanwait_timer);
+    }
+    if(g_bt_autoroute_timer && (changed || (g_autoroute_wait && (topics&UI_WAKE_BT))))bt_autoroute_poll_cb(g_bt_autoroute_timer);
 }

@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (C) 2026 diskOS contributors */
 /* tinj.c - touch injector for the FiiO Snowsky Disc (cst816t capacitive controller).
  *
  * Drives the diskOS or stock UI without a finger, for automated navigation and testing. Writes

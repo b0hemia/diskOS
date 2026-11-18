@@ -602,7 +602,6 @@ int ota_stage(const ota_paths_t *p, const char *running, const char *tag, ota_pr
     char kep[16], uep[16], path[300];
     atomic_store(&pg->done, 0); atomic_store(&pg->total, 0); atomic_store(&pg->phase, 1); pg->need_free = 0; pg->version[0] = 0;
 
-    if(!ota_allowed()) return OTA_E_OFF;                                       /* turned off in Settings: nothing is downloaded or staged */
     if(!ota_supported(p)) return OTA_E_UNSUPPORTED;
     if(read_epochs(p, kep, uep, sizeof kep) != 0) return OTA_E_UNSUPPORTED;
     int tv[3];
@@ -727,6 +726,17 @@ int ota_trial_version(const ota_paths_t *p, char *ver, size_t n){
     if(!hex64(s1) || strcmp(s1, s2) != 0) return 0;
     if(ver){ if(sys_kv(t, "VERSION", ver, n) != 0) snprintf(ver, n, "%s", "update"); }
     return 1;
+}
+/* 0 only when the running executable is certainly not the trial: its size differs from the run file's SIZE. Cheap (no
+ * hashing); a missing SIZE or an unreadable executable cannot rule the trial out and answers 1. */
+int ota_trial_maybe_me(const ota_paths_t *p){
+    char t[OTA_RUN_MAX], sz[32];
+    struct stat st;
+    if(read_file(p->run_file, t, sizeof t) <= 0 || sys_kv(t, "SIZE", sz, sizeof sz) != 0) return 1;
+    if(stat(p->self_exe, &st) != 0) return 1;
+    char *end; long long want = strtoll(sz, &end, 10);
+    if(end == sz || *end) return 1;
+    return want == (long long)st.st_size;
 }
 /* the strict form: as above, and the executable that is RUNNING hashes to that SHA256 (a fallback/flashed UI never vouches
  * for a trial it did not run, even with identical-looking run files). Fills sha. */

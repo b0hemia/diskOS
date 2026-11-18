@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Offline archive determinism and package boundary tests."""
 import hashlib
 import importlib.util

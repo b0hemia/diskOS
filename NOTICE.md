@@ -1,5 +1,26 @@
 # diskOS installer - third-party components & licenses
 
+diskOS is free software under the GNU GPL v3.0 or later (see `LICENSE`); third-party components keep
+their own licences, as listed below.
+
+## Licence history: releases up to 1.2.2 (MIT)
+
+diskOS releases up to and including 1.2.2 were published with the installer and tools under the MIT
+licence (the text is kept in `licenses/MIT-diskos-pre-1.2.3.txt`). From 1.2.3 everything the project
+wrote is GPL-3.0-or-later, except the stock-audio helper described below. Portions contributed by outside authors under MIT remain available under
+the MIT notice in that text:
+
+- commit `44ad3ce` (Chthome Luii; Arch, CachyOS and Fedora support): `README.md`,
+  `build/build-squashfs-static.sh`, `build/build-usbboot-static.sh`, `diskos_installer/__main__.py`,
+  `diskos_installer/bundle.py`, `diskos_installer/platform_probe.py`, `install.sh` and
+  `udev/70-diskos-maskrom.rules`;
+- commit `ede6698` (Pierre Nel): `diskos_installer/imagebuild.py`.
+
+## Source for the diskOS code
+
+The corresponding source for the diskOS code in a release (installer, tools, UI) is this repository at
+that release's tag. Source for the bundled third-party GPL/LGPL programs is described below.
+
 The diskOS installer ships the third-party programs and libraries below. Each is invoked as a
 separate program or loaded as a library; this document provides the required attribution and points
 to the corresponding source that ships alongside the binaries. The full verbatim license texts are in
@@ -10,7 +31,7 @@ to the corresponding source that ships alongside the binaries. The full verbatim
 | Component | Purpose | License | Source |
 |---|---|---|---|
 | **usbboot** | Ingenic X2000 mask-ROM USB loader (the flasher front-end) | **GPL-2.0-or-later** - (c) 2021 Aidan MacDonald, (c) 2015 Amaury Pouly | included: `src/usbboot/` (built from this) |
-| **mksquashfs / unsquashfs** | build/extract the rootfs image | **GPL-2.0-or-later** | Linux: 4.6.1 in `corresponding-source/squashfs-tools_4.6.1*`; macOS arm64: 4.7.5 in `corresponding-source/macos-arm64/` |
+| **mksquashfs / unsquashfs** | build/extract the rootfs image | **GPL-2.0-or-later** | Linux: 4.6.1 in `corresponding-source/linux-squashfs-musl/`; macOS arm64: 4.7.5 in `corresponding-source/macos-arm64/` |
 | **dropbearmulti** (Dropbear SSH **2022.83**) | embedded in the diskOS image; started by the opt-in Debug Mode for SSH-over-WiFi | **MIT-style** ((c) 2002-2020 Matt Johnston; components under MIT/BSD/public-domain) - text in `licenses/LICENSE-dropbear.txt` | https://matt.ucc.asn.au/dropbear/dropbear.html (v2022.83; **predates the CVE-2023-48795 "Terrapin" Strict-KEX mitigation**. Use Debug Mode only for short sessions on a trusted network and turn it off when finished.) |
 
 `usbboot` and squashfs-tools are **GPL-2.0-or-later**, so anyone redistributing them must make their
@@ -19,16 +40,17 @@ no source-availability obligation, only its license text as noted above.) **For 
 corresponding source ships in-tree and in every release tarball**, so it travels from the same place
 as the binaries (GPL-2.0 section 3(a), plus the "same place" provision in section 3's final paragraph):
 `usbboot`'s own source is `src/usbboot/usbboot.c`;
-**Linux squashfs-tools 4.6.1** source is `corresponding-source/squashfs-tools_4.6.1*`. The macOS arm64 4.7.5 source, Homebrew patch, dependency sources and formulas are in `corresponding-source/macos-arm64/`. The Linux tools are rebuilt by
+**Linux squashfs-tools 4.6.1** source is `corresponding-source/linux-squashfs-musl/squashfs-tools-4.6.1.tar.gz`. The macOS arm64 4.7.5 source, Homebrew patch, dependency sources and formulas are in `corresponding-source/macos-arm64/`. The Linux tools are rebuilt by
 `build/build-usbboot-pinned.sh` / `build/build-squashfs-static.sh`.
 
 **Static linking (Linux):** the prebuilt Linux `usbboot`, `mksquashfs`, and `unsquashfs` are shipped
-**fully statically linked** (built with `gcc -static`). They therefore statically
-incorporate:
+**fully statically linked**. They therefore statically incorporate:
 - **upstream libusb-1.0.27 (LGPL-2.1-or-later)** - in `usbboot`, from the shipped
   `.orig` archive; the Debian patch is not applied
-- **liblzo2 2.10 (GPL-2.0-or-later)**, **zlib**, **liblzma** (permissive) - in squashfs-tools
-- the **GNU C Library (glibc, LGPL-2.1-or-later)** - `2.39-0ubuntu8.8`, in all three
+- the **GNU C Library (glibc, LGPL-2.1-or-later)** - `2.39-0ubuntu8.8`, in `usbboot`
+- **LZO 2.10 (GPL-2.0-or-later)**, **zlib 1.3.2**, **liblzma (xz 5.8.4)** (permissive) and the **musl 1.2.5**
+  C library (MIT, `licenses/MIT-musl.txt`) - in `mksquashfs`/`unsquashfs`, all built from the archives in
+  `corresponding-source/linux-squashfs-musl/`
 
 The Linux x86-64 usbboot release recipe builds offline in a frozen rootless
 Podman image (`--network=none --pull=never`). It asserts exactly
@@ -46,15 +68,15 @@ Confirm the incorporated members and notices against the candidate link map.
 Because liblzo2 is GPL, the resulting `mksquashfs`/`unsquashfs` binaries are effectively GPL-2.0. The
 corresponding source for the statically-linked **GPL/LGPL** libraries is provided so their section 3/section 6
 obligations are met:
-- **liblzo2** (`corresponding-source/lzo2_2.10*`) and **libusb-1.0** (`corresponding-source/libusb-1.0_1.0.27*`)
-  ship in-tree.
-- **glibc** (statically linked, so it travels inside the binary): the **complete corresponding source**
-  is vendored in `corresponding-source/glibc_2.39*` (the exact version the shipped binaries were built
-  against). Because it is statically linked it does not qualify for the "system library" exception, so
+- **LZO** (`corresponding-source/linux-squashfs-musl/lzo-2.10.tar.gz`, also `corresponding-source/lzo2_2.10*`)
+  and **libusb-1.0** (`corresponding-source/libusb-1.0_1.0.27*`) ship in-tree.
+- **glibc** (statically linked into `usbboot`, so it travels inside the binary): the **complete
+  corresponding source** is vendored in `corresponding-source/glibc_2.39*` (the exact version the shipped
+  binary was built against). Because it is statically linked it does not qualify for the "system library" exception, so
   its source ships alongside the binaries like the others.
 
 **Relink path (satisfies LGPL-2.1 section 6 for libusb *and* glibc):** we ship the **complete source** of
-`usbboot` (`src/usbboot/usbboot.c`) and squashfs-tools (`corresponding-source/squashfs-tools_4.6.1*`)
+`usbboot` (`src/usbboot/usbboot.c`) and squashfs-tools (`corresponding-source/linux-squashfs-musl/`)
 plus the exact Linux build recipes (`build/build-usbboot-pinned.sh`, `build/build-squashfs-static.sh`). A
 user can therefore rebuild and relink these tools against a **modified** libusb, liblzo2, **or glibc**
 of their choosing - the freedom section 6 exists to protect. See
@@ -71,8 +93,8 @@ in `vendor/windows-x86_64/`:
 | `unsquashfs.exe` | GPL-2.0-or-later; static components below also apply | Same squashfs source and patch |
 | `usbboot.exe` | GPL-2.0-or-later; static components below also apply | `src/usbboot/usbboot.c` |
 | `msys-2.0.dll` | LGPL-3.0-or-later with the Cygwin linking exception (`winsup/CYGWIN_LICENSE` at tag cygwin-3.6.10; package metadata says GPL-3.0-or-later); some files BSD-like per their own notices | Release asset `msys2-runtime-3.6.10-6.src.tar.zst` and its `.sig`; `licenses/windows/msys2-runtime-CYGWIN_LICENSE.txt`, `-COPYING.LIB.txt` (LGPL-3.0), `-COPYING.txt` (GPL-3.0) |
-| `bind_winusb.exe` | MIT project code; UCRT64 static CRT and libgcc notices below apply | `src/windows-driver/`; `build/build-windows-driver.sh` |
-| `MANIFEST.txt` | MIT project build record | `build/build-windows-tools.sh`; versions and input/output SHA256 |
+| `bind_winusb.exe` | GPL-3.0-or-later project code; UCRT64 static CRT and libgcc notices below apply | `src/windows-driver/`; `build/build-windows-driver.sh` |
+| `MANIFEST.txt` | GPL-3.0-or-later project build record | `build/build-windows-tools.sh`; versions and input/output SHA256 |
 
 | Statically included component | In files | Licence | Source / notice |
 |---|---|---|---|
@@ -162,7 +184,7 @@ See `build/WINDOWS_FROZEN_DEPENDENCIES.md` for the component mapping.
 | libffi (`libffi-8.dll`) | MIT-style libffi terms; Copyright (c) 1996-2022 Anthony Green, Red Hat, Inc and others. Complete exact-install notice in `licenses/CPython-3.12.10-Windows-LICENSE.txt`, lines 366-386. |
 | zlib 1.3.1 (`zlib1.dll`) | zlib; Copyright (C) 1995-2022 Jean-loup Gailly & Mark Adler in DLL metadata. Complete upstream 1.3.1 text in `licenses/zlib-1.3.1-LICENSE-README.txt`, copied verbatim from the local 1.3.1 development package's README (1995-2024 copyright). `licenses/windows/zlib-LICENSE.txt` remains for MSYS static zlib 1.3.2. The Windows CPython notice contains no zlib licence. |
 | Tcl/Tk 8.6.15 | Tcl/Tk permissive terms and incorporated third-party terms. CPython's Tcl base text (Windows notice lines 566-605) matches the supplied Tcl source after newline normalization. `licenses/Tk-8.6.15-license.terms.txt` is the exact install's Tk text, the copy of `_internal/_tk_data/license.terms` and equal to supplied Tk source after newline normalization. Tcl notices: `licenses/Tcl-8.6.15-regex-NOTICE.txt`, `licenses/Tcl-8.6.15-libtommath-LICENSE.txt`, `licenses/Tcl-8.6.15-Bison-NOTICE.txt`, `licenses/Tcl-8.6.15-zlib-LICENSE.txt`. Tk's X11 header grants, GIF/giftoppm credit, ttk and other source copyrights and runtime script headers are preserved in `licenses/Tk-8.6.15-Incorporated-NOTICES.txt`. New Windows builds omit unused `_tk_data/images/` and `mkpsenc.tcl`, including logo GIFs, Adobe EPS procsets and glyph data; their absence is required by the inventory. Startup-required `icons.tcl` stays with `licenses/CC-BY-SA-3.0-Tango.txt`. See the inventory for notice retention and Tk exclusions. |
-| Microsoft VCRUNTIME140 and VCRUNTIME140_1, 14.42.34438.0 | These two DLLs are Microsoft Distributable Code redistributed as part of the CPython 3.12.10 runtime. CPython's "Additional Conditions for this Windows binary build" apply and are shipped verbatim in `licenses/CPython-3.12.10-Windows-LICENSE.txt`, lines 283-320. Microsoft's terms govern; see the [Visual Studio 2022 redistribution list](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution), "Visual C++ Runtime Files". The Microsoft components remain under Microsoft's terms and are not covered by this project's MIT or GPL licences. Redistributors must satisfy Microsoft's conditions; the "licensed Visual Studio user" condition is a separate Microsoft-terms question. |
+| Microsoft VCRUNTIME140 and VCRUNTIME140_1, 14.42.34438.0 | These two DLLs are Microsoft Distributable Code redistributed as part of the CPython 3.12.10 runtime. CPython's "Additional Conditions for this Windows binary build" apply and are shipped verbatim in `licenses/CPython-3.12.10-Windows-LICENSE.txt`, lines 283-320. Microsoft's terms govern; see the [Visual Studio 2022 redistribution list](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution), "Visual C++ Runtime Files". The Microsoft components remain under Microsoft's terms and are not covered by this project's GPL licence. Redistributors must satisfy Microsoft's conditions; the "licensed Visual Studio user" condition is a separate Microsoft-terms question. |
 | Dynamic libusb 1.0.27 | LGPL-2.1-or-later; `licenses/windows/libusb-COPYING.txt` matches the 1.0.27 source archive's COPYING. Windows builds explicitly pin the official VS2022/MS64 DLL in `build/windows-libusb.json` and ship `corresponding-source/libusb-1.0_1.0.27.orig.tar.bz2` with its upstream signature. The pinned DLL SHA256 is `d4e5db4fad8bef7201dc5a4a71ca997e6dccc9da25e8a988d4be63b13a02208d`. The source archive SHA256 `ffaa41d741a8a3bee244ac8e54a72ea05bf2879663c098c82fc5757853441575` is byte-identical to upstream libusb-1.0.27.tar.bz2; its shipped signature uses signing fingerprint `9C7EA94939C69C4FBC3DBFA8AA0639079EFB61B9`. Preserve the pinned inputs and notices when packaging. See `build/WINDOWS_FROZEN_DEPENDENCIES.md`. |
 | MSYS2 runtime 3.6.10 (vendor and `_internal` root copies) | Same complete Cygwin/LGPL-3.0, newlib and BSD/per-file notices and source sidecars as the Windows tool bundle above. |
 
@@ -213,10 +235,9 @@ rebuild and relink `usbboot` against a modified libusb using the included source
 ## Website
 
 The website in `site/` is deployed separately from the installer. Its HTML, CSS,
-JavaScript, and diskOS-owned screenshot images are MIT licensed under `LICENSE`,
+JavaScript, and diskOS-owned screenshot images are GPL-3.0-or-later under `LICENSE`,
 Copyright (c) 2026 diskOS contributors. This grant covers only rights held by diskOS
 contributors; third-party artwork and trademarks remain with their respective owners.
-The on-device UI source remains GPL-3.0-or-later.
 
 The ten website fonts retain their upstream licences: nine are OFL-1.1 and
 Special Elite is Apache-2.0. Their copyright notices and licence texts are retained
@@ -224,9 +245,9 @@ in `site/fonts/`; see [the font index](licenses/README.md#website-fonts).
 
 ## diskOS's own code
 
-- **The Python installer, build scripts, and docs** in this repo are licensed **MIT** -
+- **The Python installer, build scripts, and docs** in this repo are licensed **GPL-3.0-or-later** -
   `Copyright (c) 2026 diskOS contributors`. See `LICENSE`.
-  The installer GUI is part of this MIT tooling. Its display assets in
+  The installer GUI is part of this tooling. Its display assets in
   `diskos_installer/assets/` use Archivo for titles in `display*.png` and the
   wordmark in `wordmark*.png`, and Michroma for section kickers in `display*.png`.
   Both fonts are SIL OFL 1.1; their full notices are
@@ -234,13 +255,13 @@ in `site/fonts/`; see [the font index](licenses/README.md#website-fonts).
   `diskos_installer/assets/LICENSE-michroma-OFL.txt`. Lettering is pre-rendered;
   dynamic text uses the system font and no fonts are installed on the computer.
   The `disc*.png` illustration contains no font lettering.
-- **`payload/diskos-launch`** is MIT project tooling; source: `src/launcher/diskos_launch.c`,
+- **`payload/diskos-launch`** is GPL-3.0-or-later project tooling; source: `src/launcher/diskos_launch.c`,
   built by `build/build-launcher.sh`.
 - **`payload/diskos-bootprobe`** is GPL-3.0-or-later UI helper code; source:
   `ui/tools/diskos_bootprobe.c`, built with the UI tools.
 - **The diskOS UI source** (`ui/`, built to `payload/mq_ui`, static-musl MIPS) is licensed
   **GPL-3.0-or-later** (`ui/COPYING`, `licenses/GPL-3.0.txt`; (c) diskOS contributors) - deliberately
-  separate from the MIT tooling above so UI forks stay open. It bundles LVGL (MIT), SQLite (public
+  the same licence as the installer and tools since 1.2.3. It bundles LVGL (MIT), SQLite (public
   domain), jsmn (MIT), md5 (public domain), and Montserrat / Source Han Sans / Font Awesome /
   IBM Plex Mono (as `diskos_mono`) / Doto (as `diskos_dot`) and the theme fonts Inter, DSEG7 Classic, JetBrains Mono,
   Space Grotesk, IBM Plex Sans, Nunito, Courier Prime and Rubik Glitch (as `diskos_<theme>_*`),
@@ -256,8 +277,7 @@ in `site/fonts/`; see [the font index](licenses/README.md#website-fonts).
   runtime (MIT). stb_image is NOT part of `mq_ui`.
 
   **`diskos-audiodec`** (source `ui/tools/diskos_audiodec.c`, new in 1.2.2) is a small helper that decodes audio
-  for Cast and AirPlay sending. It is diskOS's own code (SPDX `MIT` in the helper sources, covered by
-  `ui/tools/AUDIO_STOCK_LICENSE`) and is embedded inside the `mq_ui` binary, which is GPL-3.0-or-later; `mq_ui`
+  for Cast and AirPlay sending. It is diskOS's own code (SPDX `MIT`, covered by `ui/tools/AUDIO_STOCK_LICENSE`; it stays MIT on purpose, see below) and is embedded inside the `mq_ui` binary, which is GPL-3.0-or-later; `mq_ui`
   writes it out at run time. It links **dynamically** against the FFmpeg libraries (`libavformat`, `libavcodec`,
   `libavutil`) that are already installed on the Disc in FiiO's firmware. Only FFmpeg's public headers (4.2.2,
   checked by SHA-256 in `ui/third_party/build-stock-audiodec.sh`) are used to compile it.
@@ -265,6 +285,11 @@ in `site/fonts/`; see [the font index](licenses/README.md#website-fonts).
   macros used here fall within LGPL-2.1 section 5. The licence text is supplied in
   `licenses/LGPL-2.1.txt`. No FFmpeg implementation source files are compiled into
   the helper, and no FiiO shared libraries are redistributed.
+
+  **MIT exception.** The stock-audio helper (`ui/audio_stock_wire.h`, `ui/tools/audio_stock_start.S`,
+  `ui/tools/diskos_audiodec.c` and `ui/third_party/build-stock-audiodec.sh`) stays MIT on purpose,
+  because it loads the Disc's stock FFmpeg libraries, which FiiO configured with `--enable-nonfree`.
+  See `ui/tools/AUDIO_STOCK_LICENSE`. Everything else the project wrote is GPL-3.0-or-later.
 
   The built `mq_ui` binary statically incorporates these third-party components, whose licenses
   apply to the shipped binary (and whose source ships in `ui/` / `ui/lvgl/`):
@@ -357,8 +382,9 @@ is not distributed here.
 ### License and source notes
 - Full license texts shipped in [`licenses/`](licenses/) (GPL-2.0, LGPL-2.1, BSD, PSF, LVGL-MIT,
   dropbear, Font Awesome OFL/CC-BY) - see [`licenses/README.md`](licenses/README.md).
-- diskOS installer/tooling license: **MIT** (`LICENSE`). The diskOS **UI source** is published
-  under **GPL-3.0-or-later** in `ui/` (`ui/COPYING`, `licenses/GPL-3.0.txt`) with its embedded
+- diskOS is free software under the **GNU GPL v3.0 or later** (`LICENSE`): the installer, the tools
+  and the UI in `ui/` (`ui/COPYING`, `licenses/GPL-3.0.txt`). Third-party components keep their own
+  licences, as listed in this file. The UI ships with its embedded
   LVGL/SQLite/jsmn/Font Awesome/Montserrat/Source Han Sans/IBM Plex Mono/Doto/theme-font notices shipped.
 - Upstream versions and corresponding source are shipped in-tree for the GPL/LGPL native
   binaries: Linux squashfs-tools 4.6.1 and libusb 1.0.27; macOS arm64 squashfs-tools 4.7.5 and libusb 1.0.30; liblzo2 2.10, the SPL, and usbboot. Source is in [`corresponding-source/`](corresponding-source/) and [`spl-src/`](spl-src/).
@@ -375,3 +401,14 @@ rebuilding and relinking the native tools against modified libusb. Keep those
 files with the app when redistributing. See `build/MACOS_FROZEN_DEPENDENCIES.md`
 for the required matching-runtime notice/source additions. The freezer refuses
 a package missing these files. Ad-hoc signing adds no redistribution restriction.
+
+HarfBuzz 14.6.0 is bundled under the Old MIT licence; see
+`licenses/HarfBuzz-COPYING` and the retained COPYING files in its subtrees.
+SheenBidi 3.0.0 is bundled under Apache-2.0; see
+`licenses/SheenBidi-Apache-2.0.txt`. The unmodified canary fonts in
+`tools/hbcanary/fonts/` remain under OFL-1.1, with their five licence texts
+alongside the fonts. These separate font assets retain their original names
+and licences. The Unicode 17.0.0 bidi conformance data in `tools/hbcanary/bidi/`
+(test fixtures, not shipped to the device) is under the Unicode License v3;
+see `licenses/Unicode-License-v3.txt`. See `licenses/README.md` for the
+component mapping.

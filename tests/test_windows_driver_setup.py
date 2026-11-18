@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Driver guidance and elevation integration; no Windows, network or USB needed."""
 import contextlib
 import ctypes

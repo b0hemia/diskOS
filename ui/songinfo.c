@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
+#include "indic.h"
 #include "screens.h"
 #include "theme.h"
 #include "musicdb.h"   /* mdb_is_book_path: this page doubles as "Book details" for an audiobook */
@@ -204,7 +205,7 @@ static void si_probe(const char *path, int track, si_tech_t *t){
 
 /* ---- per-track worker: the result is applied by songinfo_set on a later tick ---------------------------------- */
 static pthread_mutex_t g_si_mu = PTHREAD_MUTEX_INITIALIZER;
-static char      g_si_path[256];        /* the track the page is showing (under g_si_mu) ... */
+static char      g_si_path[TRACK_PATH_MAX];        /* the track the page is showing (under g_si_mu) ... */
 static int       g_si_track;            /* ... and its CUE/ISO sub-track (0 = a plain file) */
 static unsigned  g_si_gen;              /* bumps when the (path, track) identity changes */
 static int       g_si_running;
@@ -212,7 +213,7 @@ static si_tech_t g_si_res; static unsigned g_si_res_gen; static int g_si_applied
 static void *si_worker(void *arg){
     (void)arg;
     for(;;){
-        char path[256]; int track; unsigned gen; si_tech_t t;
+        char path[TRACK_PATH_MAX]; int track; unsigned gen; si_tech_t t;
         pthread_mutex_lock(&g_si_mu); snprintf(path, sizeof path, "%s", g_si_path); track = g_si_track; gen = g_si_gen; pthread_mutex_unlock(&g_si_mu);
         si_probe(path, track, &t);
         pthread_mutex_lock(&g_si_mu);
@@ -270,13 +271,13 @@ void songinfo_create(lv_obj_t *root)
         lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
         g_cell[i] = cell;
 
-        lv_obj_t *k = lv_label_create(cell);
+        lv_obj_t *k = indic_label_create(cell);
         lv_label_set_text(k, KEYS[i]);
         lv_obj_set_style_text_font(k, TF(UI_14), 0);
         lv_obj_set_style_text_color(k, TC(TEXT_MUTED), 0);
         g_key[i] = k;
 
-        lv_obj_t *v = lv_label_create(cell);
+        lv_obj_t *v = indic_label_create(cell);
         lv_obj_set_width(v, 268);
         lv_obj_set_style_text_align(v, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(v, LV_LABEL_LONG_WRAP);
@@ -314,7 +315,7 @@ void songinfo_set(const track_state_t *st)
      * DB genre), applied when it lands. A row with no known value stays hidden rather than showing a dash. */
     si_tech_t tech; int changed = 0;
     /* which CUE/ISO track is playing: the queue row (a2 pos_id) names it; re-asked only when the row or file changes */
-    static char tk_path[256]; static int tk_pos = -1, tk_track;
+    static char tk_path[TRACK_PATH_MAX]; static int tk_pos = -1, tk_track;
     if(tk_pos != st->pos_id || strcmp(tk_path, st->path) != 0){
         if(!mdb_ui_read_begin()) return;   /* keep tech rows, retry this identity next tick */
         int trk = 0;

@@ -20,7 +20,7 @@ LV_FONT_DECLARE(font_icons_28)          /* FontAwesome 28px: play-mode + app-til
 #define LFM_ICON "\xEF\x88\x82"         /* f202 lastfm    -> Last.fm */
 /* Settings/File reuse LV_SYMBOL_SETTINGS (f013) / LV_SYMBOL_FILE (f15b), now in this font */
 
-typedef struct { char name[64]; char exec[256]; } app_t;
+typedef struct { char name[320]; char exec[320]; } app_t;
 static app_t g_apps[MAX_APPS];
 static int g_napps;
 static lv_obj_t *g_list;

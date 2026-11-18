@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # Offline candidate build. Never installs into vendor/.
 set -eu
 export LC_ALL=C TZ=UTC

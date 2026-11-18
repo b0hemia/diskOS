@@ -1,4 +1,4 @@
-# A tour of diskOS 1.2.2
+# A tour of diskOS 1.2.3
 
 diskOS is a touch interface for the FiiO Snowsky Disc's 360x360 screen. Local playback uses the player supplied by the installed stock firmware; Beam plays through the selected receiver. The available player controls differ on V2.09, V2.28, V2.40, and V2.57; unavailable firmware-specific controls say "Not on this firmware". AirPlay Receiving is offered on V2.40 and V2.57 only.
 
@@ -64,7 +64,7 @@ Swipe right from the left edge to go Back one page. Swipe up from the bottom edg
 
 ### Screensaver and screen off
 
-After the Screensaver delay, the screen enters idle dimming; Cover and Vinyl savers open automatically only during playback. Vinyl with a cover keeps your chosen brightness. The Screen Off delay then turns the panel fully off unless set to Off. Choose Cover, Analog, Minimal, Digital, Vinyl, or Custom under Saver Style, which opens a list of choices. Set Screensaver to Off to disable both automatic idle stages. Touch wakes diskOS idle dimming and Screen Off; use the power button if the stock player put the panel to sleep.
+After the Screensaver delay, the screen enters idle dimming; Cover and Vinyl savers open automatically only during playback. Vinyl with a cover keeps your chosen brightness. The Screen Off delay then turns the panel fully off unless set to Off. Choose Cover, Analog, Minimal, Digital, Vinyl, or Custom under Saver Style, which opens a list of choices. Set Screensaver to Off to skip the saver and dimming stage; Screen Off still turns the panel off at its own delay. Touch wakes diskOS idle dimming and Screen Off; use the power button if the stock player put the panel to sleep.
 
 Song text appears while playing and hides when paused; optional weather appears where the style has room. The smaller, raised Analog dial leaves room for song text. Vinyl hides song labels while showing a spinning cover, but keeps text when no cover is available. Titles and artists refresh between tracks from a CUE sheet or SACD ISO, even when their file path is shared.
 
@@ -121,11 +121,13 @@ If Wi-Fi is off, tap Wi-Fi settings to connect. Use Search again to refresh the 
 
 AirPlay PIN pairing uses a keypad on the Disc; enter the digits shown by the receiver and tap Pair. Successful pairing is remembered. If pairing fails before PIN entry, Beam keeps the failure on screen so you can try again. After a PIN or verification failure, Forget pairing clears the saved pairing before retrying. Password-protected AirPlay 1 receivers are not supported.
 
-While you beam, the Disc stays quiet. Play, pause, skip, seek, volume keys and the volume dial act on the receiver. Now Playing says "Beaming to" with its name, or "Paused -" with its name when paused. Before starting, set all three volume-key actions (Press, Double Press and Long Press) to Adjust Volume under Settings > Controls. If they need changing, the picker explains this before listing devices and its Controls button opens that category directly. You cannot change them to Switch Track during Beam.
+While you beam, the Disc stays quiet. Play, pause, skip, seek, volume keys and the volume dial act on the receiver. On V2.57, the physical play/pause key also pauses and resumes the Cast or AirPlay receiver when the key reader is available, without starting local playback. Other firmware keeps its previous key behavior. A press early in the handoff can cancel it. Now Playing says "Beaming to" with its name, or "Paused -" with its name when paused. Before starting, set all three volume-key actions (Press, Double Press and Long Press) to Adjust Volume under Settings > Controls. If they need changing, the picker explains this before listing devices and its Controls button opens that category directly. You cannot change them to Switch Track during Beam.
 
 Compatible AirPlay receivers show the track's cover, title, artist and progress. TV remotes can play, pause and skip to the next or previous track where supported. Cast and AirPlay covers update with the track; Beam waits up to 15 seconds for a cover that is not ready when playback starts.
 
 Library selections, Favourites, playlists and play modes control the remote queue. Up Next shows that queue and lets you jump to a track. During AirPlay beaming, hold an upcoming track for Play next, Remove from Up Next or Cancel. Unsupported entries show why they cannot play; automatic progression reports skipped tracks. Favourite toggles for the playing track are unavailable while beaming, lyrics follow the remote track, and Song Info hides the Disc's output sample rate. Cast listening can scrobble to Last.fm when enabled; AirPlay sending and receiving do not.
+
+A Cast receiver Stop keeps the same song stopped on the Disc. Disc Play reloads it from its last usable reported position, or its known start position; invalid retained positions fall back to zero. This can be earlier than the actual stop.
 
 Stop beaming ends the session. When the current track can continue on the Disc, it also resumes the last playback position once the receiver is known to have stopped. If Cast has no track to resume, the Disc stays paused. Cast also offers Play on Disc. After a different remote queue was selected, only the current track returns to the Disc. During AirPlay beaming, Play on Disc opens a confirmation: it can continue the original queue or, when that queue cannot be restored, play only the current track. Returning playback no longer briefly plays from 0:00 or flashes 0:00 on the clock. If stopping the receiver was not confirmed, the Disc warns that the TV may still be playing; stop it first. Choose Keep beaming to cancel the return while the session is active.
 
@@ -166,7 +168,7 @@ Lyrics first looks for a local .lrc beside the song, then lyrics embedded in its
 
 ### Equalizer
 
-The Equalizer row offers Off, Jazz, Rock, R&B, Hip-Hop, Pop, Dance, Classical, Retro, Sibilance 1 and 2, and USER1 through USER10. Custom EQ shows ten fixed bands from 32 Hz to 16 kHz plus a master level; choose a USER slot, scroll sideways to reach more bands, and drag its sliders within -12 to +12 dB. The controls leave space for longer fitted page titles. If a slot cannot be read, the previous curve and slot stay visible; editing is refused until a successful read. Retry the slot selection. On firmware where the stock curve can be written, changes save to that slot and are sent to the player. On V2.57 the Custom EQ editor is view-only: sliders are dimmed, and tapping a band explains "Not on this firmware".
+The Equalizer row offers Off, Jazz, Rock, R&B, Hip-Hop, Pop, Dance, Classical, Retro, Sibilance 1 and 2, and USER1 through USER10. Custom EQ shows ten fixed bands from 32 Hz to 16 kHz plus a master level; choose a USER slot, scroll sideways to reach more bands, and drag its sliders within -12 to +12 dB. The controls leave space for longer fitted page titles. If a slot cannot be read, the previous curve and slot stay visible; editing is refused until a successful read. Retry the slot selection. On firmware where the stock curve can be written, changes save to that slot and are sent to the player. On V2.57 the editor works like the stock one: each change edits one band of a ten-band USER preset, keeps the other bands and their Q values, and the saved row is read back after each change. Advanced parametric presets made elsewhere stay view-only.
 
 <table>
 <tr>
@@ -180,9 +182,9 @@ The Equalizer row offers Off, Jazz, Rock, R&B, Hip-Hop, Pop, Dance, Classical, R
 
 Library opens Songs, Albums, Artists, Genres, Playlists, Favourites, Folders, Books, and History. History contains Most Played and Recently Played. Tap a category and then an item to open its next level; tap a song to play it, or use Play and Shuffle at the top of a song list. Hold an album, artist, or genre row to play its songs, and use the Add to Playlist row inside an album, artist, or genre song list to add that displayed group. Drag along the outer edge to scroll a long list, or tap the A-Z control and a letter to jump; the left-edge right swipe remains Back.
 
-Songs is the complete indexed music list. Artists and Genres open a list of their albums plus All Songs, while Albums opens an album's cover and tracks. Album View can switch the Albums list to Cover Flow: flick or drag the covers, use the rim to move through them, tap the centered album to open its tracks, or hold it to play the album. A cover wall can show placeholders until artwork has been cached; playing a track with art can fill that cache.
+Songs is the complete indexed music list. Artists and Genres open a list of their albums plus All Songs, while Albums opens an album's cover and tracks. Album View can switch the Albums list to Cover Flow: flick or drag the covers, use the rim to move through them, tap the centered album to open its tracks, or hold it to play the album. Cover Flow loads the covers it shows; until a cover is ready it shows a placeholder. Album Art Cache can also prepare covers in the background.
 
-Missing or blank artist tags appear together under "Unknown artist"; open or play that group to find its songs. Returning from Now Playing to the top-level Songs, Albums, Artists, or Genres lists no longer reloads them. Back and returns from another screen restore the list position with the opened item in view. After a rescan, Cover Flow removes deleted albums and retries a failed reload.
+Artist, album artist and album sort tags set the order of Artists, Albums, A-Z and Cover Flow after a rescan; the names shown do not change. Missing or blank artist tags appear together under "Unknown artist"; open or play that group to find its songs. Returning from Now Playing to the top-level Songs, Albums, Artists, or Genres lists no longer reloads them. Back and returns from another screen restore the list position with the opened item in view. After a rescan, Cover Flow removes deleted albums and retries a failed reload.
 
 <table>
 <tr>
@@ -291,7 +293,7 @@ Audio controls equalization, DAC options and output limits. SPDIF Output is avai
 | DAC Filter | Slow LL by default; choose Fast LL, Slow PC, Fast PC, NOS, or Wideband. |
 | ReplayGain | Off by default; choose Track or Album leveling. |
 | DRE | On by default; switch the player's Dynamic Range Enhancement on or off. |
-| Gapless | Off by default; switch gapless playback on or off. |
+| Gapless | Follows the stock setting until you choose here; switch gapless playback on or off. |
 
 #### Output limits
 
@@ -309,13 +311,13 @@ Switch a radio on its row, tap the row to open it, rescan, and tap a listed devi
 | Wi-Fi | Switch the radio on the row; tapping the row while it is off turns it on, and tapping it while it is on opens scanning, connection, and saved-network details. |
 | Bluetooth | Switch the radio on the row; tapping the row while it is off turns it on, and tapping it while it is on opens scanning, pairing, connection, and device details. |
 | Bluetooth Codec | SBC by default; V2.57 offers AAC, LDAC Mobile, LDAC Standard, and LDAC High. The stock player applies the chosen codec; changing this row sends the choice at once. An unsupported headphone can fall back to SBC. |
-| Device name | The Disc's network name (letters, digits and hyphens, up to 32 characters, starting and ending with a letter or digit) and the name Beam shows to receivers. Applies after a restart; needs a 1.2.2 full flash. Reset this name returns to the stock default. |
+| Device name | The Disc's network name (letters, digits and hyphens, up to 32 characters, starting and ending with a letter or digit) and the name Beam shows to receivers. Applies after a restart; needs a full flash of 1.2.2 or later. Reset this name returns to the stock default. |
 | Bluetooth name | The name other Bluetooth devices see (printable ASCII, up to 32 characters and nine words). Reset this name returns to SNOWSKY DISC. A pending change applies when Bluetooth is available. |
 | Audio Source | Open Local Playback, Bluetooth Receiving, AirPlay Receiving (V2.40 and V2.57), USB DAC, or USB Storage. Local Playback is the usual music mode. |
 
 ### Settings: Display
 
-Display controls appearance and idle behavior. Changing theme or text size redraws the interface while music continues. Outdoor Mode holds a light appearance and full brightness until switched off, then restores the saved appearance and brightness.
+Display controls appearance and idle behavior. Changing theme or text size redraws the interface while music continues. Applying a theme can wait for radio work to settle; if it cannot complete, diskOS restores the previous choices and says "Couldn't apply the theme now". Outdoor Mode holds a light appearance and full brightness until switched off, then restores the saved appearance and brightness.
 
 #### Screen
 
@@ -346,7 +348,7 @@ Display controls appearance and idle behavior. Changing theme or text size redra
 
 | Row | Action and default |
 |---|---|
-| Screensaver | 1 min by default; choose Off, 30 sec, 1 min, 2 min, or 5 min. Off disables both automatic idle stages. |
+| Screensaver | 1 min by default; choose Off, 30 sec, 1 min, 2 min, or 5 min. Off skips the saver and dimming; Screen Off still applies. |
 | Saver Style | Cover by default; open Cover, Analog, Minimal, Digital, Vinyl, or Custom. Custom opens image and overlay choices described under Screensaver and screen off. |
 | Screen Off | 2 min by default; choose Off, 30 sec, 1 min, 2 min, or 5 min. |
 
@@ -356,7 +358,7 @@ Display controls appearance and idle behavior. Changing theme or text size redra
 
 | Row | Action and default |
 |---|---|
-| Artists | By Artist by default; By Album Artist uses album-artist tags. Unsupported firmware says "Not on this firmware". |
+| Artists | By Artist by default, where featured artists ("feat.", "ft.", "featuring") get their own entry; By Album Artist uses album-artist tags as written. Unsupported firmware says "Not on this firmware". |
 | Track Numbers | Off by default; show numbers in album song lists. |
 | Album View | List by default; choose List or Cover Flow for Albums. |
 
@@ -365,7 +367,7 @@ Display controls appearance and idle behavior. Changing theme or text size redra
 | Row | Action and default |
 |---|---|
 | Online Album Art | Off by default; look up a missing album cover over Wi-Fi. |
-| Album Art Cache | Covers only by default; optional background decoding When Idle or Idle & Charging. |
+| Album Art Cache | Covers only by default; optional background preparation When Idle or Idle & Charging. Covers share one cache on the card of up to 4 GiB that always leaves 1 GiB free; identical pictures are stored once, and older covers not on screen are removed when space is needed. |
 | Online Lyrics | On by default; permit lookup of missing words over Wi-Fi. |
 
 #### Maintenance
@@ -373,7 +375,7 @@ Display controls appearance and idle behavior. Changing theme or text size redra
 | Row | Action and default |
 |---|---|
 | Tag Encoding | Auto by default: guess legacy Cyrillic (CP1251) tags and CUE-sheet text. Western keeps the previous decoding; Cyrillic reads legacy text as CP1251. Use Rescan Library after changing the choice to apply it to existing songs; valid UTF-8 and UTF-16 tags are unchanged. |
-| Rescan Library | Scan the card with progress shown; tap Stop to cancel pending scan changes. |
+| Rescan Library | Scan the card with progress shown; tap Stop to cancel pending scan changes. Until sort tags have been read once this row reads "Rescan for sort tags"; a rescan also reads WAV tags. |
 | Import Playlists | Import recognized .m3u and .m3u8 lists from the card. |
 
 ### Settings: Controls
@@ -389,6 +391,19 @@ Display controls appearance and idle behavior. Changing theme or text size redra
 ### Settings: Battery & Power
 
 The page opens with a battery summary with each reading on its own line: charge percentage, health, cycles and temperature. This is information, not a tappable row.
+
+Low-battery notices warn at 10% or below and 5% or below. Each warning rearms after charging
+to 12% or 7%, respectively; starting at 4% shows the 5% warning rather than both.
+A full-battery notice announces 100% after charging has been observed.
+
+On V2.40 and V2.57, a valid 0% reading while not charging shows "Battery empty" and starts
+a 30-second countdown. Turn off now skips the countdown, rereads the battery state, and
+follows the same playback-stop, card-drain and flush checks. Detected charging, a reading
+above 0%, or unavailable battery or charging evidence cancels the countdown. If the checks
+fail, diskOS keeps card access closed, withholds its power-off request and asks you to
+restart. A failure while the screen is off shows the restart notice when the screen wakes.
+This cannot prevent stock firmware or exhausted hardware from turning the Disc off. Other
+firmware gets notices without diskOS's empty-battery shutdown.
 
 | Row | Action and default |
 |---|---|
@@ -433,14 +448,14 @@ The page opens with a battery summary with each reading on its own line: charge 
 | Row | Action and default |
 |---|---|
 | Restart | Confirm a restart; a busy card or failed flush can leave the device running with an error. |
-| Reset diskOS Settings | Confirm reset of diskOS appearance and behavior choices, both Disc names and paired-device nicknames; music, pairings, Wi-Fi, Bluetooth, Last.fm, EQ, and audio settings remain. |
+| Reset diskOS Settings | Confirm reset of diskOS appearance and behavior choices, both Disc names and paired-device nicknames; music, pairings, Wi-Fi, Bluetooth, Last.fm, EQ, and audio settings remain. A new reset restarts partly completed work from defaults. If Bluetooth is off, settings reset completes and nickname clearing waits until Bluetooth is turned on; the dialog explains the wait. |
 | Debug Mode | Off by default; enable temporary SSH over Wi-Fi with a new shown password. |
 
 ### Eight themes
 
 Display > Theme has eight built-in themes; each also has a Dark and Light appearance. Tap a theme name to apply it and use Appearance to switch its variant. The theme changes fonts, colors, and layouts, while the available music and settings actions stay the same. The Now Playing screenshots above show the most visible layout differences.
 
-Chinese, Japanese, and Korean names and titles use the stock font fallback across themes and text sizes. Zine and something retain their title faces for Latin-1 accented letters; zine also covers Cyrillic U+0400-U+045F in its own face. Theme case styling handles Latin-1, Latin Extended-A, and Cyrillic U+0400-U+045F letter pairs.
+Chinese, Japanese, and Korean names and titles use the stock font fallback across themes and text sizes. Gurmukhi, Devanagari, Urdu and Hebrew names use embedded Noto faces: Gurmukhi and Devanagari are shaped correctly, and Urdu and Hebrew read right to left. Zine and something retain their title faces for Latin-1 accented letters; zine also covers Cyrillic U+0400-U+045F in its own face. Theme case styling handles Latin-1, Latin Extended-A, and Cyrillic U+0400-U+045F letter pairs.
 
 | Theme | What changes |
 |---|---|
@@ -472,7 +487,7 @@ Wi-Fi allows up to 75 seconds for a connection. Network details refresh as it co
 
 Swipe left from Home to Apps, then tap Last.fm, Settings, or an installed external app. An external app takes over the screen and touch input while it runs; its behavior depends on that app. Last.fm setup shows a QR code for entering your own API key and secret on a phone, then a second authorization step; after connection, toggle Scrobbling or tap Disconnect. Failed account or session setting saves are retried. Cast listening can scrobble; AirPlay sending and receiving do not. It is Off until you set it up; the setup page uses plain HTTP on your local Wi-Fi.
 
-With Weather on Home enabled, tap the glance to open Weather. "Weather unavailable" is tappable too, so you can set the location before a reading is available. In Weather, choose a location manually or request automatic location. Weather depends on Wi-Fi and the remote service.
+With Weather on Home enabled, tap the glance to open Weather. "Weather unavailable" is tappable too, so you can set the location before a reading is available. In Weather, choose a location manually or request automatic location. Weather shows when it last updated, and Refresh asks for a new reading. A failed or invalid reading keeps the last good one. Weather depends on Wi-Fi and the remote service, and starts no new fetch while it is off.
 
 <table>
 <tr>
@@ -485,12 +500,13 @@ With Weather on Home enabled, tap the glance to open Weather. "Weather unavailab
 
 ### Updates, startup, and power
 
-1.2.1 users can install the signed 1.2.2 app update over Wi-Fi from Settings > System >
-Update diskOS if updates are allowed. Fresh installs and older versions use the installer.
-The app update replaces only diskOS, not stock firmware or the whole image. It does not
-replace the boot install script. The network name hook, the per-flash identity and the
-boot-script update-retention fix require a full flash with the complete 1.2.2 installer; see the
-[release notes](RELEASE_NOTES_1.2.2.md).
+1.2.2 users can install the signed 1.2.3 app update over Wi-Fi from Settings > Device >
+Update diskOS if updates are allowed. It includes the matching cover helper and delivers
+the 1.2.3 UI changes without a full flash. Fresh installs and older versions use the installer.
+App updates do not replace stock firmware, the boot script or the image's minimum update epoch.
+The boot-log correction and newer image minimum come with a full flash using the 1.2.3 installer.
+The network name hook, per-flash identity and boot-script update-retention fix introduced in
+1.2.2 require a full flash with 1.2.2 or later; see the [1.2.2 release notes](RELEASE_NOTES_1.2.2.md).
 A download shows a progress bar with a percentage and a Cancel button, then Verifying and Saving.
 With Automatic Update Checks on, a new release is announced once; downloading still needs your tap.
 The release installer includes the diskOS release key by default; untick "Allow diskOS
@@ -507,15 +523,23 @@ website and installer.
 
 The stock player handles the physical power button: one press blanks the display and another restores it. Touch wakes diskOS idle dimming or Screen Off, but a panel put to sleep by the stock player needs the power button. On V2.57, one power-button press also wakes diskOS Screen Off. Button wake restores your diskOS brightness.
 
-When the sleep timer shuts the Disc down, or it powers off after being idle, with the screen on, the screen closes into the disc. A light travels once round the ring while the card is saved safely, and the screen fades to black when done. If saving cannot finish, the screen comes back. The power key is unchanged. The charging icon follows the stock player's charging report and disappears when full; idle power-off does not run while charging, with AirPlay Receiving or Bluetooth Receiving selected, or using USB DAC or USB Storage. These idle holds do not cancel an explicit sleep-timer shutdown.
+When the sleep timer shuts the Disc down, or it powers off after being idle, with the screen on, the screen closes into the disc. A light travels once round the ring while the card is saved safely, and the screen fades to black when done. If saving cannot finish, the screen comes back. When the player announces a power-key shutdown, diskOS stops new card work, stops cover helpers and image previews, and attempts to drain and flush pending work before the player turns off. It joins a shutdown already in progress. It cannot guarantee flushing finishes before stock shutdown. If the player restarts, card access resumes and the library is checked again. Announcement behavior on every older firmware remains unverified. The charging icon follows the stock player's charging report and disappears when full; idle power-off does not run while charging, with AirPlay Receiving or Bluetooth Receiving selected, or using USB DAC or USB Storage. These idle holds do not cancel an explicit sleep-timer shutdown.
 
-The physical play/pause button controls playback through the stock player. The Volume Up and Volume Down keys adjust volume by default, or switch tracks according to the V2.57 Vol Keys settings. The separate Screensaver, Screen Off, Sleep Timer, and Idle Power-off choices control later idle behavior. For USB Storage, eject the card safely on the computer before changing modes; diskOS can refuse the switch when card ownership is uncertain.
+The physical play/pause button controls local playback through the stock player. While beaming on V2.57, it pauses and resumes the Cast or AirPlay receiver when the key reader is available; other firmware keeps its previous key behavior. The Volume Up and Volume Down keys adjust volume by default, or switch tracks according to the V2.57 Vol Keys settings. The separate Screensaver, Screen Off, Sleep Timer, and Idle Power-off choices control later idle behavior. For USB Storage, eject the card safely on the computer before changing modes; diskOS can refuse the switch when card ownership is uncertain.
 
 ### Limits
 
 The scanner indexes common music formats and also recognizes AAC, OGG, OPUS, APE, AIFF/AIF, WMA, DSF,
 DFF, DTS, external CUE sheets, and SACD ISO tracks; indexing a format does not ensure the stock
 player can play it. V2.09 playlist and book playback may fail.
+
+diskOS carries complete absolute track paths of up to 1023 bytes through the library,
+playback display, lyrics, Song Info, playlists, artwork and Beam, including audiobook resume
+and play history. Oversized paths are refused or skipped instead of cut short. An oversized
+current-track report shows Track unavailable / Path too long. Sidecar artwork also needs
+room for its filename. This is diskOS's path capacity; actual playback and the stock player's
+reporting limit at that length remain unverified on each firmware. The separate stock folder
+command still has a 511-byte payload limit.
 
 Some mono FLAC, MP3, and Opus files can play slowed down, taking about twice as long
 in the stock player. diskOS checks briefly for a missed track advance while the screen
@@ -526,8 +550,6 @@ On V2.57, Wi-Fi can still be delayed or turned off after a restart when Bluetoot
 If Wi-Fi is off, turn it on in Settings > Network > Wi-Fi; if it shows no IP, reconnect there.
 
 Beam: Cast and AirPlay receivers must be on the same Wi-Fi and may not appear on guest networks. Format limits are listed under Beam. Cast control messages are encrypted, but the Disc does not check the receiver's identity. Music and artwork are sent over plain HTTP on your local network. Use a network you trust.
-Hebrew letters show in Library and Now Playing; right-to-left ordering is not corrected.
-
 ### Safety and stock UI
 
 Settings > Device > Default UI > Stock makes the stock interface the normal boot choice. To use the other interface for one boot, hold Volume Up from power-on until it appears; keep holding long enough for the switch to register. Both choices leave the diskOS image installed. To remove that image, the desktop installer restores a validated saved stock image or rebuilds one using **Get firmware** or **Browse...**. See [restore and recovery](INSTALL.md#restore-stock-and-recover) and [Get firmware](INSTALL.md#get-firmware).

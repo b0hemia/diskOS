@@ -7,23 +7,10 @@
 #ifndef AUDIO_STOCK_IMAGE_RAW
 #error "AUDIO_STOCK_IMAGE_RAW must name the generated helper image"
 #endif
-	.section .diskos_audiodec,"a",%progbits
-	.globl diskos_audiodec_image
-	.globl diskos_audiodec_image_end
-	.type diskos_audiodec_image,%object
-diskos_audiodec_image:
-	.incbin AUDIO_STOCK_IMAGE_RAW, 48
-diskos_audiodec_image_end:
-	.size diskos_audiodec_image, diskos_audiodec_image_end - diskos_audiodec_image
-
-	.section .rodata.diskos_audiodec_desc,"a",%progbits
-	.balign 4
-	.globl diskos_audiodec_desc
-	.type diskos_audiodec_desc,%object
-diskos_audiodec_desc:
-	.incbin AUDIO_STOCK_IMAGE_RAW, 0, 48
-	/* The number of bytes actually included; must equal the generated length. */
-	.4byte diskos_audiodec_image_end - diskos_audiodec_image
-	.size diskos_audiodec_desc, 52
-
-	.section .note.GNU-stack,"",%progbits
+#define EMBED_RAW AUDIO_STOCK_IMAGE_RAW
+#define EMBED_SECTION .diskos_audiodec
+#define EMBED_DESC_SECTION .rodata.diskos_audiodec_desc
+#define EMBED_IMAGE diskos_audiodec_image
+#define EMBED_IMAGE_END diskos_audiodec_image_end
+#define EMBED_DESC diskos_audiodec_desc
+#include "embedded_image.inc"

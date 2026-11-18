@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """One verified TLS context and the exact-host URL allowlist for firmware fetches.
 
 Trust model: the system default roots AND the pinned certifi bundle are both

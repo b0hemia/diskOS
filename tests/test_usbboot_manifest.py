@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Offline provenance fixtures; no compiler, container, network or USB device."""
 import copy
 import importlib.util
