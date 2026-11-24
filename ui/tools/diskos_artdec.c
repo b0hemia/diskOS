@@ -10,8 +10,8 @@
  * Usage:
  *   diskos-artdec art   <input> <outdir>   writes <outdir>/c.bmp (148x148), t.bmp (42x42), b.bmp (360x360 blurred)
  *   diskos-artdec saver <input> <outfile>  writes 360x360 top-down BGRA (518400 bytes), for the vinyl screensaver
- * <input> is an audio file with an embedded picture (MP3/ID3v2.2-2.4, FLAC, MP4/M4A, WAV with an ID3 chunk) or a
- * plain JPEG/PNG/BMP/GIF picture, recognised by content, not by name. <outdir> must be an existing directory made
+ * <input> is an audio file with an embedded picture (MP3/ID3v2.2-2.4, FLAC, Ogg/Opus/Vorbis, MP4/M4A, WAV with an ID3
+ * chunk) or a plain JPEG/PNG/BMP/GIF picture, recognised by content, not by name. <outdir> must be an existing directory made
  * for this request; outputs are created exclusively (never overwritten) and the caller validates them.
  *
  * Exit status: 0 done, 2 usage, 3 no picture, 4 unsupported picture format, 5 malformed input, 6 over a resource
@@ -50,6 +50,7 @@ enum { ST_OK = 0, ST_USAGE = 2, ST_NOPIC = 3, ST_UNSUPPORTED = 4, ST_MALFORMED =
 #define MAX_PIXELS      4194304u
 #define BUDGET_BYTES    (32u << 20)
 #define MAX_TAG_READ    (9u << 20)       /* ID3 bytes read into memory: one max picture plus the frames around it */
+#define MAX_OGG_TAG_READ (12u << 20)     /* Ogg comment packet plus base64 expansion of one max-size picture */
 #define MAX_CANDIDATES  16
 #define MAX_WALK        4096             /* frames / atoms / metadata blocks visited per file */
 #define MAX_DEPTH       8                /* MP4 atom nesting */
@@ -360,6 +361,190 @@ static int parse_wav(void){
         off = body + len + (len & 1);
     }
     return 0;
+}
+
+
+/* ------------------------------------------------------------------ Ogg/Opus/Vorbis */
+static int ascii_equal(const unsigned char *p, size_t n, const char *s){
+    size_t i = 0;
+    for(; i < n && s[i]; i++){
+        unsigned char c = p[i];
+        if(c >= 'a' && c <= 'z') c -= 'a' - 'A';
+        if(c != (unsigned char)s[i]) return 0;
+    }
+    return i == n && s[i] == 0;
+}
+
+static int decode_base64(const unsigned char *p, size_t n, unsigned char **out, size_t *outlen){
+    if(n == 0 || (n & 3)) return -1;
+    size_t pad = p[n - 1] == '=' ? 1 : 0;
+    if(n > 1 && p[n - 2] == '=') pad++;
+    size_t len = n / 4 * 3 - pad;
+    if(len > MAX_PIC_BYTES + (64u << 10)){ g_limited = 1; return -1; }
+    unsigned char *q = bmalloc(len);
+    if(!q){ g_limited = 1; return -1; }
+    size_t o = 0;
+    for(size_t i = 0; i < n; i += 4){
+        unsigned int v = 0;
+        int count = 0;
+        for(int j = 0; j < 4; j++){
+            unsigned char c = p[i + (size_t)j];
+            int x;
+            if(c >= 'A' && c <= 'Z') x = c - 'A';
+            else if(c >= 'a' && c <= 'z') x = c - 'a' + 26;
+            else if(c >= '0' && c <= '9') x = c - '0' + 52;
+            else if(c == '+') x = 62;
+            else if(c == '/') x = 63;
+            else if(c == '=' && i + 4 == n && j >= 2 && !(j == 2 && p[i + 3] != '=')) x = 0;
+            else { bfree(q); return -1; }
+            if(c != '=') count++;
+            v = (v << 6) | (unsigned int)x;
+        }
+        if((i + 4 < n && count != 4) || (i + 4 == n && count != 4 - (int)pad)){
+            bfree(q); return -1;
+        }
+        if(o < len) q[o++] = (unsigned char)(v >> 16);
+        if(o < len) q[o++] = (unsigned char)(v >> 8);
+        if(o < len) q[o++] = (unsigned char)v;
+    }
+    *out = q; *outlen = len;
+    return 0;
+}
+
+static int parse_flac_picture_mem(unsigned char *p, size_t n){
+    if(n < 32){ g_malformed = 1; return -1; }
+    uint32_t type = be32(p), mlen = be32(p + 4);
+    size_t q = 8;
+    if(mlen > n - q){ g_malformed = 1; return -1; }
+    q += mlen;
+    if(n - q < 4){ g_malformed = 1; return -1; }
+    uint32_t dlen = be32(p + q); q += 4;
+    if(dlen > n - q){ g_malformed = 1; return -1; }
+    q += dlen;
+    if(n - q < 20){ g_malformed = 1; return -1; }
+    uint32_t plen = be32(p + q + 16); q += 20;
+    if(plen > n - q){ g_malformed = 1; return -1; }
+    int before = g_ncand;
+    add_cand(type == 3, p + q, 0, plen);
+    return plen != 0 && plen <= MAX_PIC_BYTES && g_ncand > before;
+}
+
+static void parse_comment_fields(const unsigned char *p, size_t n, size_t off, int vorbis_framing){
+    if(off > n || n - off < 8){ g_malformed = 1; return; }
+    uint32_t vendor = le32(p + off);
+    off += 4;
+    if(vendor > n - off || n - off - vendor < 4){ g_malformed = 1; return; }
+    off += vendor;
+    uint32_t count = le32(p + off); off += 4;
+    if(count > MAX_WALK){ g_limited = 1; return; }
+    for(uint32_t i = 0; i < count; i++){
+        if(n - off < 4){ g_malformed = 1; return; }
+        uint32_t len = le32(p + off); off += 4;
+        if(len > n - off){ g_malformed = 1; return; }
+        const unsigned char *comment = p + off;
+        const unsigned char *eq = memchr(comment, '=', len);
+        if(eq){
+            size_t keylen = (size_t)(eq - comment), valuelen = len - keylen - 1;
+            const unsigned char *value = eq + 1;
+            if(ascii_equal(comment, keylen, "METADATA_BLOCK_PICTURE")){
+                g_saw_picture = 1;
+                if(g_ntags >= MAX_TAGS){ g_limited = 1; off += len; continue; }
+                unsigned char *picture = NULL;
+                size_t picture_len = 0;
+                if(decode_base64(value, valuelen, &picture, &picture_len) == 0){
+                    int keep = parse_flac_picture_mem(picture, picture_len);
+                    if(keep && g_ntags < MAX_TAGS) g_tags[g_ntags++] = picture;
+                    else bfree(picture);
+                } else if(!g_limited) g_malformed = 1;
+            } else if(ascii_equal(comment, keylen, "COVERART")){
+                g_saw_picture = 1;
+                if(g_ntags >= MAX_TAGS){ g_limited = 1; off += len; continue; }
+                unsigned char *image = NULL;
+                size_t image_len = 0;
+                if(decode_base64(value, valuelen, &image, &image_len) == 0){
+                    int before = g_ncand;
+                    add_cand(1, image, 0, image_len);
+                    if(image_len && image_len <= MAX_PIC_BYTES && g_ncand > before) g_tags[g_ntags++] = image;
+                    else bfree(image);
+                } else if(!g_limited) g_malformed = 1;
+            }
+        }
+        off += len;
+    }
+    if(vorbis_framing && (off >= n || !(p[off] & 1))) g_malformed = 1;
+}
+
+static void parse_opus_tags(const unsigned char *p, size_t n){
+    if(n < 16 || memcmp(p, "OpusTags", 8)){ g_malformed = 1; return; }
+    parse_comment_fields(p, n, 8, 0);
+}
+
+static void parse_vorbis_comments(const unsigned char *p, size_t n){
+    if(n < 16 || p[0] != 3 || memcmp(p + 1, "vorbis", 6)){ g_malformed = 1; return; }
+    parse_comment_fields(p, n, 7, 1);
+}
+
+static void parse_ogg(void){
+    uint64_t off = 0;
+    uint32_t serial = 0;
+    int have_serial = 0, packet_no = 0, packet_open = 0, tags_seen = 0, pages = 0, codec = 0;
+    unsigned char *packet = NULL;
+    size_t packet_len = 0, packet_cap = 0;
+    for(; pages < MAX_WALK && off < g_fsize; pages++){
+        unsigned char h[27], lace[255];
+        if(g_fsize - off < sizeof h || rd(off, h, sizeof h) || memcmp(h, "OggS", 4) || h[4] != 0){
+            g_malformed = 1; break;
+        }
+        uint32_t page_serial = le32(h + 14);
+        unsigned int segments = h[26];
+        uint64_t body = off + sizeof h;
+        if(segments && rd(body, lace, segments)){ g_malformed = 1; break; }
+        body += segments;
+        uint64_t body_len = 0;
+        for(unsigned int i = 0; i < segments; i++) body_len += lace[i];
+        if(body_len > g_fsize - body){ g_malformed = 1; break; }
+        uint64_t page_end = body + body_len;
+        if(!have_serial){ serial = page_serial; have_serial = 1; }
+        if(page_serial == serial){
+            if(((h[5] & 1) != 0) != packet_open){ g_malformed = 1; break; }
+            for(unsigned int i = 0; i < segments; i++){
+                size_t part = lace[i];
+                if(packet_len > MAX_OGG_TAG_READ - part){ g_limited = 1; goto done; }
+                size_t need = packet_len + part;
+                if(need > packet_cap){
+                    size_t cap = packet_cap ? packet_cap : 256;
+                    while(cap < need && cap < MAX_OGG_TAG_READ) cap *= 2;
+                    if(cap > MAX_OGG_TAG_READ) cap = MAX_OGG_TAG_READ;
+                    unsigned char *grown = brealloc(packet, cap);
+                    if(!grown){ g_limited = 1; goto done; }
+                    packet = grown; packet_cap = cap;
+                }
+                if(part && rd(body, packet + packet_len, part)){ g_malformed = 1; goto done; }
+                packet_len += part; body += part;
+                packet_open = part == 255;
+                if(!packet_open){
+                    if(packet_no == 0){
+                        if(packet_len >= 8 && !memcmp(packet, "OpusHead", 8)) codec = 1;
+                        else if(packet_len >= 30 && packet[0] == 1 && !memcmp(packet + 1, "vorbis", 6) &&
+                                le32(packet + 7) == 0 && packet[11] != 0 && (packet[29] & 1)) codec = 2;
+                        else goto done;
+                        packet_no = 1;
+                    } else {
+                        tags_seen = 1;
+                        if(codec == 1) parse_opus_tags(packet, packet_len);
+                        else parse_vorbis_comments(packet, packet_len);
+                        goto done;
+                    }
+                    packet_len = 0;
+                }
+            }
+        }
+        off = page_end;
+    }
+    if(pages == MAX_WALK && off < g_fsize && packet_no == 1) g_limited = 1;
+done:
+    if(packet_no == 1 && !tags_seen && !g_limited) g_malformed = 1;
+    bfree(packet);
 }
 
 /* ------------------------------------------------------------------ image helpers */
@@ -806,6 +991,7 @@ int main(int argc, char **argv){
     else if(hn >= 4 && !memcmp(head, "fLaC", 4)) parse_flac(0);
     else if(hn >= 8 && !memcmp(head + 4, "ftyp", 4)) mp4_walk(0, g_fsize, 0, 0);
     else if(hn >= 12 && !memcmp(head, "RIFF", 4) && !memcmp(head + 8, "WAVE", 4)) parse_wav();
+    else if(hn >= 4 && !memcmp(head, "OggS", 4)) parse_ogg();
     else if(img_sig(head, hn)) add_cand(1, NULL, 0, g_fsize);
     else if(hn == 0) return ST_MALFORMED;
     else if(g_fsize > 3 && (head[0] == 0xFF && (head[1] & 0xE0) == 0xE0)) return ST_NOPIC;   /* bare MPEG audio */
